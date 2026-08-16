@@ -77,3 +77,29 @@ async def test_inline_terminal_redraws_mutable_content_after_resize() -> None:
     assert "full output" in output.text
     normalized = output.text.replace("\r", "")
     assert "╭─ prompt " + "─" * 21 + "╮" in normalized
+
+
+async def test_ctrl_c_clears_and_ctrl_d_exits_only_with_empty_editor() -> None:
+    submitted: list[str] = []
+    output = CapturingOutput()
+
+    with create_pipe_input() as pipe_input:
+        with create_app_session(input=pipe_input, output=output):
+            terminal = InlineTerminal(on_submit=submitted.append)
+            running = asyncio.create_task(terminal.run())
+            await terminal.wait_until_ready()
+
+            pipe_input.send_text("discard")
+            pipe_input.send_bytes(b"\x03")
+            pipe_input.send_text("\r")
+            await asyncio.sleep(0.01)
+            assert submitted == []
+
+            pipe_input.send_text("keep")
+            pipe_input.send_bytes(b"\x04")
+            await asyncio.sleep(0.01)
+            assert not running.done()
+            pipe_input.send_bytes(b"\x03\x04")
+            await asyncio.wait_for(running, timeout=1)
+
+    assert submitted == []

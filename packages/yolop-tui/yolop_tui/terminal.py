@@ -4,6 +4,7 @@ from collections.abc import Callable
 from prompt_toolkit.application import Application
 from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.completion import Completer
+from prompt_toolkit.document import Document
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import HSplit, Layout, VSplit, Window
 from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl, UIContent, UIControl
@@ -17,9 +18,11 @@ class InlineTerminal:
         self,
         *,
         on_submit: Callable[[str], None],
+        on_cancel: Callable[[], None] | None = None,
         completer: Completer | None = None,
     ) -> None:
         self._on_submit = on_submit
+        self._on_cancel = on_cancel or (lambda: None)
         self._transcript = ""
         self._ready = asyncio.Event()
         self._buffer = Buffer(
@@ -40,6 +43,14 @@ class InlineTerminal:
         self._transcript = text
         self._application.invalidate()
 
+    def restore_editor_text(self, text: str) -> None:
+        if not text:
+            return
+        current = self._buffer.text
+        restored = f"{current}\n\n{text}" if current else text
+        self._buffer.set_document(Document(restored, cursor_position=len(restored)))
+        self._application.invalidate()
+
     def stop(self) -> None:
         if self._application.is_running:
             self._application.exit()
@@ -58,6 +69,14 @@ class InlineTerminal:
         @bindings.add("c-j")
         def newline(_event) -> None:
             self._buffer.insert_text("\n")
+
+        @bindings.add("escape")
+        def cancel(_event) -> None:
+            self._on_cancel()
+
+        @bindings.add("c-c")
+        def clear_editor(_event) -> None:
+            self._buffer.reset()
 
         @bindings.add("c-d")
         def exit_when_empty(_event) -> None:
@@ -83,7 +102,7 @@ class InlineTerminal:
             ]
         )
         bottom_border = Window(content=_BorderControl(top=False), height=1)
-        return Application(
+        application = Application(
             layout=Layout(
                 HSplit([transcript, top_border, editor_frame, bottom_border]),
                 editor,
@@ -92,6 +111,9 @@ class InlineTerminal:
             full_screen=False,
             erase_when_done=False,
         )
+        application.timeoutlen = 0.1
+        application.ttimeoutlen = 0.1
+        return application
 
     def _transcript_height(self) -> Dimension:
         if not self._transcript:

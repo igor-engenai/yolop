@@ -1,7 +1,7 @@
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass
 
-from pydantic_ai import AgentRunResultEvent, AgentSpec, TemplateStr
+from pydantic_ai import AgentRunResultEvent, AgentSpec, AgentStreamEvent, RunContext, TemplateStr
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
@@ -76,3 +76,34 @@ async def test_runtime_accepts_native_structured_user_content() -> None:
 
     assert run.result is not None
     assert run.result.output == "It defines the answer."
+
+
+async def test_execute_exposes_native_run_context_to_the_event_handler() -> None:
+    event_kinds: list[str] = []
+    contexts: list[RunContext[None]] = []
+
+    async def respond(
+        _messages: list[ModelMessage],
+        _info: AgentInfo,
+    ) -> AsyncIterator[str]:
+        yield "Handled"
+
+    async def handle(
+        context: RunContext[None],
+        events: AsyncIterable[AgentStreamEvent],
+    ) -> None:
+        contexts.append(context)
+        event_kinds.extend([event.event_kind async for event in events])
+
+    result = await Yolop().execute(
+        AgentSpec(),
+        "Use the handler",
+        event_stream_handler=handle,
+        model=FunctionModel(stream_function=respond),
+        deps=None,
+        deps_type=type(None),
+    )
+
+    assert result.output == "Handled"
+    assert contexts
+    assert "part_start" in event_kinds
