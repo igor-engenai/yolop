@@ -6,6 +6,7 @@ from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
     ModelResponse,
+    TextContent,
     TextPart,
     UserPromptPart,
 )
@@ -47,3 +48,31 @@ async def test_agent_spec_runs_as_a_native_pydantic_event_stream() -> None:
     assert final_event.result.output == "AgentSpec works"
     assert run.result is final_event.result
     assert run.all_messages()[:2] == history
+
+
+async def test_runtime_accepts_native_structured_user_content() -> None:
+    prompt = [
+        TextContent(content="Explain the file"),
+        TextContent(content='<yolop-file path="answer.py">\nANSWER = 42\n</yolop-file>'),
+    ]
+
+    async def respond(messages: list[ModelMessage], _info: AgentInfo) -> AsyncIterator[str]:
+        request = messages[-1]
+        assert isinstance(request, ModelRequest)
+        user_prompt = request.parts[-1]
+        assert isinstance(user_prompt, UserPromptPart)
+        assert user_prompt.content == prompt
+        yield "It defines the answer."
+
+    async with Yolop().run(
+        AgentSpec(),
+        prompt,
+        model=FunctionModel(stream_function=respond),
+        deps=None,
+        deps_type=type(None),
+    ) as run:
+        async for _event in run:
+            pass
+
+    assert run.result is not None
+    assert run.result.output == "It defines the answer."

@@ -3,6 +3,7 @@ from collections.abc import Callable
 
 from prompt_toolkit.application import Application
 from prompt_toolkit.buffer import Buffer
+from prompt_toolkit.completion import Completer
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import HSplit, Layout, VSplit, Window
 from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl, UIContent, UIControl
@@ -12,11 +13,20 @@ from prompt_toolkit.layout.dimension import Dimension
 class InlineTerminal:
     """Own the mutable terminal region while preserving normal scrollback."""
 
-    def __init__(self, *, on_submit: Callable[[str], None]) -> None:
+    def __init__(
+        self,
+        *,
+        on_submit: Callable[[str], None],
+        completer: Completer | None = None,
+    ) -> None:
         self._on_submit = on_submit
         self._transcript = ""
         self._ready = asyncio.Event()
-        self._buffer = Buffer(multiline=True)
+        self._buffer = Buffer(
+            completer=completer,
+            complete_while_typing=completer is not None,
+            multiline=True,
+        )
         self._application = self._build_application()
 
     async def run(self) -> None:

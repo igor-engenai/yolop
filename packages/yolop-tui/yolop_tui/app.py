@@ -4,6 +4,7 @@ from pydantic_ai import AgentSpec
 from pydantic_ai.models import KnownModelName, Model
 from yolop_session import RuntimeStore
 
+from .files import FileReferenceCompleter
 from .terminal import InlineTerminal
 
 
@@ -20,12 +21,16 @@ async def run_tui[DepsT](
     cwd: Path | None = None,
 ) -> None:
     """Run the inline terminal host until the user exits."""
-    _ = (spec, store, namespace, deps, deps_type, model, model_id, session_id, cwd)
+    _ = (spec, store, namespace, deps, deps_type, model, model_id, session_id)
+    working_directory = (cwd or Path.cwd()).expanduser().resolve()
     terminal: InlineTerminal
 
     def submit(text: str) -> None:
         if text.strip() == "/quit":
             terminal.stop()
 
-    terminal = InlineTerminal(on_submit=submit)
+    terminal = InlineTerminal(
+        on_submit=submit,
+        completer=FileReferenceCompleter(working_directory),
+    )
     await terminal.run()

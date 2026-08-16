@@ -3,7 +3,7 @@ from contextlib import AbstractAsyncContextManager
 from typing import Any
 
 from pydantic_ai import Agent, AgentRunEvents, AgentSpec
-from pydantic_ai.messages import ModelMessage
+from pydantic_ai.messages import ModelMessage, UserContent
 from pydantic_ai.models import KnownModelName, Model
 
 from .capabilities import load_capability_types
@@ -15,7 +15,7 @@ class Yolop:
     def run[DepsT](
         self,
         spec: AgentSpec | dict[str, Any],
-        prompt: str,
+        prompt: str | Sequence[UserContent] | None,
         *,
         deps: DepsT,
         deps_type: type[DepsT],
