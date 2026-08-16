@@ -24,10 +24,13 @@ class DuckDB(AbstractCapability[Any]):
     """Provide read-only SQL access to a host-opened DuckDB connection."""
 
     max_rows: int = 200
+    timeout_seconds: float = 30
 
     def __post_init__(self) -> None:
         if self.max_rows < 1:
             raise ValueError("max_rows must be positive")
+        if self.timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be positive")
 
     async def for_run(self, ctx: RunContext[Any]) -> AbstractCapability[Any]:
         connection = _connection(ctx.deps)
@@ -39,13 +42,18 @@ class DuckDB(AbstractCapability[Any]):
         access_mode = await asyncio.to_thread(_access_mode, connection)
         if access_mode != "read_only":
             raise UserError("DuckDB capability requires a connection with access_mode=read_only")
-        return _DuckDBRun(connection=connection, max_rows=self.max_rows)
+        return _DuckDBRun(
+            connection=connection,
+            max_rows=self.max_rows,
+            timeout_seconds=self.timeout_seconds,
+        )
 
 
 @dataclass
 class _DuckDBRun(AbstractCapability[Any]):
     connection: duckdb.DuckDBPyConnection
     max_rows: int
+    timeout_seconds: float
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
     _toolset: FunctionToolset[Any] = field(init=False, repr=False)
 
@@ -67,7 +75,24 @@ class _DuckDBRun(AbstractCapability[Any]):
     async def query_duckdb(self, sql: str) -> dict[str, Any]:
         """Run one read-only SQL query against the host-provided DuckDB database."""
         async with self._lock:
-            return await asyncio.to_thread(_query, self.connection, sql, self.max_rows)
+            worker = asyncio.create_task(
+                asyncio.to_thread(_query, self.connection, sql, self.max_rows)
+            )
+            try:
+                return await asyncio.wait_for(
+                    asyncio.shield(worker),
+                    timeout=self.timeout_seconds,
+                )
+            except TimeoutError:
+                self.connection.interrupt()
+                await asyncio.gather(worker, return_exceptions=True)
+                raise ModelRetry(
+                    f"DuckDB query timed out after {self.timeout_seconds:g} seconds"
+                ) from None
+            except asyncio.CancelledError:
+                self.connection.interrupt()
+                await asyncio.gather(worker, return_exceptions=True)
+                raise
 
 
 def _connection(deps: Any) -> duckdb.DuckDBPyConnection:
@@ -111,15 +136,12 @@ def _query(
     if statements[0].type != duckdb.StatementType.SELECT:
         raise ModelRetry("Only read-only DuckDB queries are allowed")
 
-    cursor = connection.cursor()
     try:
-        cursor.execute(sql)
-        columns = [description[0] for description in cursor.description]
-        rows = cursor.fetchmany(max_rows + 1)
+        connection.execute(sql)
+        columns = [description[0] for description in connection.description]
+        rows = connection.fetchmany(max_rows + 1)
     except duckdb.Error as error:
         raise ModelRetry(f"DuckDB query failed: {error}") from error
-    finally:
-        cursor.close()
 
     return {
         "columns": columns,

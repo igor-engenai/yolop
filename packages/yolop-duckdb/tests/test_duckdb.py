@@ -1,5 +1,7 @@
+import asyncio
 import json
 from collections.abc import AsyncIterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -43,6 +45,17 @@ def test_max_rows_must_be_positive() -> None:
     with raises(ValueError, match="max_rows must be positive"):
         Yolop().run(
             {"capabilities": [{"DuckDB": {"max_rows": 0}}]},
+            "Query data.",
+            model=FunctionModel(stream_function=_unused_stream),
+            deps=None,
+            deps_type=type(None),
+        )
+
+
+def test_timeout_must_be_positive() -> None:
+    with raises(ValueError, match="timeout_seconds must be positive"):
+        Yolop().run(
+            {"capabilities": [{"DuckDB": {"timeout_seconds": 0}}]},
             "Query data.",
             model=FunctionModel(stream_function=_unused_stream),
             deps=None,
@@ -194,6 +207,109 @@ async def test_connection_must_disable_external_access(tmp_path: Path) -> None:
                 _ = [event async for event in run]
     finally:
         connection.close()
+
+
+async def test_query_timeout_interrupts_duckdb_and_returns_a_model_retry(
+    tmp_path: Path,
+) -> None:
+    connection = read_only_connection(tmp_path)
+
+    async def respond(
+        messages: list[ModelMessage], _info: AgentInfo
+    ) -> AsyncIterator[str | DeltaToolCalls]:
+        retries = [
+            part
+            for message in messages
+            if isinstance(message, ModelRequest)
+            for part in message.parts
+            if isinstance(part, RetryPromptPart)
+        ]
+        if not retries:
+            yield {
+                0: DeltaToolCall(
+                    name="query_duckdb",
+                    json_args=json.dumps(
+                        {
+                            "sql": (
+                                "select sum(sin(i)) "
+                                "from range(100000000) values_to_sum(i)"
+                            )
+                        }
+                    ),
+                    tool_call_id="slow-query",
+                )
+            }
+        else:
+            assert "timed out" in str(retries[-1].content)
+            yield "Timeout handled"
+
+    try:
+        async with Yolop().run(
+            {"capabilities": [{"DuckDB": {"timeout_seconds": 0.001}}]},
+            "Run a slow query.",
+            model=FunctionModel(stream_function=respond),
+            deps=HostDeps(duckdb_connection=connection),
+            deps_type=HostDeps,
+        ) as run:
+            events = [event async for event in run]
+        assert connection.execute("select 1").fetchone() == (1,)
+    finally:
+        connection.close()
+
+    final_event = events[-1]
+    assert isinstance(final_event, AgentRunResultEvent)
+    assert final_event.result.output == "Timeout handled"
+
+
+def test_cancellation_waits_for_the_duckdb_worker_to_exit(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        loop = asyncio.get_running_loop()
+        loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
+        connection = read_only_connection(tmp_path)
+
+        async def respond(
+            _messages: list[ModelMessage], _info: AgentInfo
+        ) -> AsyncIterator[str | DeltaToolCalls]:
+            yield {
+                0: DeltaToolCall(
+                    name="query_duckdb",
+                    json_args=json.dumps(
+                        {
+                            "sql": (
+                                "select sum(sin(i)) "
+                                "from range(100000000) values_to_sum(i)"
+                            )
+                        }
+                    ),
+                    tool_call_id="slow-query",
+                )
+            }
+
+        async def execute() -> None:
+            async with Yolop().run(
+                {"capabilities": ["DuckDB"]},
+                "Run a slow query.",
+                model=FunctionModel(stream_function=respond),
+                deps=HostDeps(duckdb_connection=connection),
+                deps_type=HostDeps,
+            ) as run:
+                _ = [event async for event in run]
+
+        task = asyncio.create_task(execute())
+        try:
+            await asyncio.sleep(0.02)
+            task.cancel()
+            with raises(asyncio.CancelledError):
+                await task
+            marker = await asyncio.wait_for(asyncio.to_thread(lambda: "worker-free"), timeout=0.1)
+            assert marker == "worker-free"
+            assert connection.execute("select 1").fetchone() == (1,)
+        finally:
+            connection.interrupt()
+            await asyncio.gather(task, return_exceptions=True)
+            connection.close()
+
+    asyncio.run(scenario())
 
 
 async def test_parallel_tool_calls_share_one_host_connection_safely(tmp_path: Path) -> None:
