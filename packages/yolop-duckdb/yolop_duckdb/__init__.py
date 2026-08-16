@@ -154,9 +154,7 @@ def _query(
         columns = [description[0] for description in connection.description]
         result_bytes = len(to_json({"columns": columns, "rows": [], "truncated": False}))
         if result_bytes > max_result_bytes:
-            raise ModelRetry(
-                f"DuckDB result exceeded {max_result_bytes} bytes; request less data"
-            )
+            raise ModelRetry(f"DuckDB result exceeded {max_result_bytes} bytes; request less data")
         rows: list[list[Any]] = []
         truncated = False
         for index in range(max_rows + 1):

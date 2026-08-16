@@ -240,12 +240,7 @@ async def test_query_timeout_interrupts_duckdb_and_returns_a_model_retry(
                 0: DeltaToolCall(
                     name="query_duckdb",
                     json_args=json.dumps(
-                        {
-                            "sql": (
-                                "select sum(sin(i)) "
-                                "from range(100000000) values_to_sum(i)"
-                            )
-                        }
+                        {"sql": ("select sum(sin(i)) from range(100000000) values_to_sum(i)")}
                     ),
                     tool_call_id="slow-query",
                 )
@@ -285,12 +280,7 @@ def test_cancellation_waits_for_the_duckdb_worker_to_exit(tmp_path: Path) -> Non
                 0: DeltaToolCall(
                     name="query_duckdb",
                     json_args=json.dumps(
-                        {
-                            "sql": (
-                                "select sum(sin(i)) "
-                                "from range(100000000) values_to_sum(i)"
-                            )
-                        }
+                        {"sql": ("select sum(sin(i)) from range(100000000) values_to_sum(i)")}
                     ),
                     tool_call_id="slow-query",
                 )

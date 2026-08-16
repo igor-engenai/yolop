@@ -266,10 +266,14 @@ async def test_failed_json_run_is_replayed_without_a_second_model_call(tmp_path)
         )
 
     assert first.status_code == 500
-    assert retry.json() == first.json() == {
-        "code": "agent_run_failed",
-        "detail": "Agent run failed",
-    }
+    assert (
+        retry.json()
+        == first.json()
+        == {
+            "code": "agent_run_failed",
+            "detail": "Agent run failed",
+        }
+    )
     assert calls == 1
 
 
@@ -469,9 +473,7 @@ async def test_shutdown_interrupts_owned_runs_without_retrying_tools(tmp_path) -
     cancelled = asyncio.Event()
     calls = 0
 
-    async def wait_forever(
-        _messages: list[ModelMessage], _info: AgentInfo
-    ) -> AsyncIterator[str]:
+    async def wait_forever(_messages: list[ModelMessage], _info: AgentInfo) -> AsyncIterator[str]:
         nonlocal calls
         calls += 1
         started.set()

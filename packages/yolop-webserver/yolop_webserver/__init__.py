@@ -533,11 +533,7 @@ def _run_error_event(run: RuntimeRunSnapshot) -> dict[str, str]:
 
 
 def _completed_run_response(run: RuntimeRunSnapshot) -> RunResponse:
-    if (
-        run.status is not RunStatus.COMPLETED
-        or run.usage is None
-        or run.session_revision is None
-    ):
+    if run.status is not RunStatus.COMPLETED or run.usage is None or run.session_revision is None:
         raise RunStateError(f"Run {run.id!r} has no durable completion")
     return RunResponse(
         run_id=run.id,
