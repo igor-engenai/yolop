@@ -16,5 +16,8 @@ dependencies = [
     "yolop-sqlite-session>=0.1.0",
 ]
 
+[project.scripts]
+yolop = "yolop_tui.cli:main"
+
 [tool.hatch.build.targets.wheel]
 packages = ["yolop_tui"]
