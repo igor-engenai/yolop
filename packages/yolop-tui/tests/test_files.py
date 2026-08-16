@@ -21,6 +21,17 @@ def test_file_reference_adds_project_text_to_native_prompt(tmp_path: Path) -> No
     assert prompt[1].content == ('<yolop-file path="src/answer.py">\nANSWER = 42\n\n</yolop-file>')
 
 
+def test_normal_prompt_quotes_and_backticks_are_not_shell_parsed(tmp_path: Path) -> None:
+    text = "Explain `value` because it doesn't close \"either"
+
+    assert prepare_prompt(text, cwd=tmp_path) == text
+
+
+def test_incomplete_quoted_file_reference_has_a_specific_error(tmp_path: Path) -> None:
+    with pytest.raises(FileReferenceError, match="no closing double quote"):
+        prepare_prompt('Read @"project notes.md', cwd=tmp_path)
+
+
 def test_file_reference_rejects_project_escape(tmp_path: Path) -> None:
     outside = tmp_path.parent / "secret.txt"
     outside.write_text("secret")

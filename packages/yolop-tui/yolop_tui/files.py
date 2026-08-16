@@ -1,7 +1,6 @@
 import json
 import os
 import re
-import shlex
 import subprocess
 from collections.abc import Iterable
 from pathlib import Path
@@ -12,6 +11,7 @@ from pydantic_ai.messages import TextContent, UserContent
 
 _MAX_FILE_BYTES = 256 * 1024
 _MAX_TOTAL_BYTES = 1024 * 1024
+_REFERENCE_START = re.compile(r"(?<!\S)@")
 
 
 class FileReferenceError(ValueError):
@@ -152,8 +152,23 @@ def _fuzzy_match(query: str, value: str) -> bool:
 
 
 def _references(text: str) -> list[str]:
-    try:
-        tokens = shlex.split(text)
-    except ValueError as error:
-        raise FileReferenceError(f"Invalid quoted file reference: {error}") from error
-    return [token[1:] for token in tokens if token.startswith("@") and len(token) > 1]
+    references: list[str] = []
+    offset = 0
+    while match := _REFERENCE_START.search(text, offset):
+        start = match.end()
+        if start == len(text):
+            break
+        if text[start] == '"':
+            end = text.find('"', start + 1)
+            if end < 0:
+                raise FileReferenceError("Invalid quoted file reference: no closing double quote")
+            if end > start + 1:
+                references.append(text[start + 1 : end])
+            offset = end + 1
+        else:
+            end = start
+            while end < len(text) and not text[end].isspace():
+                end += 1
+            references.append(text[start:end])
+            offset = end
+    return references

@@ -86,7 +86,7 @@ While a run streams, Enter sends a native `asap` steering message. Escape cancel
 
 New streamed output follows automatically while the transcript is at the bottom. Scrolling up pauses that following until PageDown, mouse-down scrolling, or End reaches the bottom. Mouse mode is active while the TUI runs; use the terminal's modifier key, usually Shift, for native text selection.
 
-The only built-in commands are `/new`, `/resume`, `/help`, and `/quit`. Type `@` to fuzzy-complete project files. Text attachments must stay inside the project, use UTF-8, contain no null bytes, remain below 256 KiB each, and remain below 1 MiB in total.
+The only built-in commands are `/new`, `/resume`, `/help`, and `/quit`. Type `@` to fuzzy-complete project files. Use `@path` or `@"path with spaces"` for an attachment. Quotes, apostrophes, and backticks elsewhere remain ordinary prompt text and are not parsed as shell syntax. Text attachments must stay inside the project, use UTF-8, contain no null bytes, remain below 256 KiB each, and remain below 1 MiB in total.
 
 V1 does not include model switching, direct shell mode, images, an external editor, branching, remote-server mode, custom themes, custom keybindings, TUI extensions, or a native Windows support promise.
 
