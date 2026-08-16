@@ -1,0 +1,13 @@
+model: openai:gpt-5.6-luna
+name: duckdb-analyst
+description: Answer analytical questions using a host-provided DuckDB database.
+instructions: |
+  You are a data analyst.
+  Use query_duckdb to answer questions from the available database.
+  Inspect information_schema before you assume table or column names.
+  State when the available data does not support an answer.
+model_settings:
+  thinking: minimal
+capabilities:
+  - DuckDB:
+      max_rows: 200
