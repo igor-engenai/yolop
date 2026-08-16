@@ -55,6 +55,49 @@ async def test_inline_terminal_keeps_multiline_input_during_async_output() -> No
     assert "\x1b[?1049h" not in output.text
 
 
+async def test_inline_terminal_keeps_editor_visible_after_long_output() -> None:
+    output = CapturingOutput(rows=8)
+
+    with create_pipe_input() as pipe_input:
+        with create_app_session(input=pipe_input, output=output):
+            terminal = InlineTerminal(on_submit=lambda _text: None)
+            running = asyncio.create_task(terminal.run())
+            await terminal.wait_until_ready()
+
+            terminal.set_transcript("\n".join(f"response line {index}" for index in range(20)))
+            await asyncio.sleep(0.01)
+            terminal.stop()
+            await running
+
+    assert "Window too small" not in output.text
+    assert "response line 19" in output.text
+    assert "╭─ prompt" in output.text
+
+
+async def test_inline_terminal_keeps_latest_output_visible_after_vertical_resize() -> None:
+    output = CapturingOutput(rows=24)
+
+    with create_pipe_input() as pipe_input:
+        with create_app_session(input=pipe_input, output=output):
+            terminal = InlineTerminal(on_submit=lambda _text: None)
+            running = asyncio.create_task(terminal.run())
+            await terminal.wait_until_ready()
+
+            terminal.set_transcript("\n".join(f"initial line {index}" for index in range(10)))
+            await asyncio.sleep(0.01)
+            output.rows = 7
+            terminal.set_transcript(
+                "\n".join([*(f"initial line {index}" for index in range(10)), "after resize"])
+            )
+            await asyncio.sleep(0.01)
+            terminal.stop()
+            await running
+
+    assert "Window too small" not in output.text
+    assert "after resize" in output.text
+    assert "╭─ prompt" in output.text
+
+
 async def test_inline_terminal_redraws_mutable_content_after_resize() -> None:
     output = CapturingOutput(columns=64)
 

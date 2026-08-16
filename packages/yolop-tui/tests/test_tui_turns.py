@@ -65,7 +65,8 @@ class WaitingTool(AbstractCapability[ToolDeps]):
 
 
 class CapturingOutput(DummyOutput):
-    def __init__(self) -> None:
+    def __init__(self, *, rows: int = 24) -> None:
+        self.rows = rows
         self.writes: list[str] = []
 
     def write(self, data: str) -> None:
@@ -75,7 +76,7 @@ class CapturingOutput(DummyOutput):
         self.writes.append(data)
 
     def get_size(self) -> Size:
-        return Size(rows=24, columns=80)
+        return Size(rows=self.rows, columns=80)
 
     @property
     def text(self) -> str:
@@ -188,6 +189,48 @@ async def test_tui_renders_and_continues_an_existing_session(tmp_path: Path) -> 
 
     saved = await store.load_session("test", session.id)
     assert len(saved.messages) == 4
+
+
+async def test_tui_resumes_long_history_in_a_small_terminal(tmp_path: Path) -> None:
+    spec = AgentSpec()
+    store = SQLiteRuntimeStore(tmp_path / "runtime.db")
+    session = await store.create_session(
+        "test",
+        pin=ExecutionPin.from_spec(spec, model_id="test:model"),
+    )
+    long_answer = "\n".join(f"history line {index}" for index in range(30))
+    await store.replace_session(
+        "test",
+        session.id,
+        expected_revision=session.revision,
+        messages=[
+            ModelRequest(parts=[UserPromptPart("Earlier question")]),
+            ModelResponse(parts=[TextPart(long_answer)]),
+        ],
+    )
+
+    output = CapturingOutput(rows=8)
+    with create_pipe_input() as pipe_input:
+        with create_app_session(input=pipe_input, output=output):
+            running = asyncio.create_task(
+                run_tui(
+                    spec,
+                    store=store,
+                    namespace="test",
+                    deps=None,
+                    deps_type=type(None),
+                    model="test:model",
+                    model_id="test:model",
+                    session_id=session.id,
+                    cwd=tmp_path,
+                )
+            )
+            await _wait_for_output(output, "history line 29")
+            pipe_input.send_text("/quit\r")
+            await asyncio.wait_for(running, timeout=1)
+
+    assert "Window too small" not in output.text
+    assert "╭─ prompt" in output.text
 
 
 async def test_failed_tui_turn_returns_to_editor_without_saving(tmp_path: Path) -> None:

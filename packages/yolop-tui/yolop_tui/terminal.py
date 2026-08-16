@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from prompt_toolkit.application import Application
 from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.completion import Completer
+from prompt_toolkit.data_structures import Point
 from prompt_toolkit.document import Document
 from prompt_toolkit.formatted_text import AnyFormattedText, fragment_list_to_text, to_formatted_text
 from prompt_toolkit.history import InMemoryHistory
@@ -172,9 +173,16 @@ class InlineTerminal:
                 self.stop()
 
         transcript = Window(
-            content=FormattedTextControl(lambda: self._transcript),
+            content=FormattedTextControl(
+                lambda: self._transcript,
+                get_cursor_position=lambda: Point(
+                    x=0,
+                    y=max(0, self._transcript_lines - 1),
+                ),
+            ),
             height=self._transcript_height,
             wrap_lines=True,
+            always_hide_cursor=True,
         )
         selector = Window(
             content=FormattedTextControl(self._selection_fragments),
@@ -225,7 +233,11 @@ class InlineTerminal:
         return application
 
     def _transcript_height(self) -> Dimension:
-        return Dimension.exact(self._transcript_lines)
+        return Dimension(
+            min=0,
+            preferred=self._transcript_lines,
+            max=self._transcript_lines,
+        )
 
     def _selection_height(self) -> Dimension:
         if self._selection is None:
