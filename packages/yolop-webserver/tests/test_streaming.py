@@ -3,12 +3,22 @@ import json
 from collections.abc import AsyncIterator, MutableMapping
 from typing import Any
 
+from fastapi import Request
 from httpx import ASGITransport, AsyncClient
 from pydantic_ai import AgentSpec
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.models.function import AgentInfo, FunctionModel
-from yolop_sqlite_session import SQLiteSessionStore
+from yolop_session import ExecutionPin
+from yolop_sqlite_session import SQLiteRuntimeStore
 from yolop_webserver import create_app
+
+
+def local_namespace(_request: Request) -> str:
+    return "local"
+
+
+def no_deps(_namespace: str, _session_id: str) -> None:
+    return None
 
 
 async def test_stream_returns_native_events_then_a_durable_completion(tmp_path) -> None:
@@ -18,10 +28,12 @@ async def test_stream_returns_native_events_then_a_durable_completion(tmp_path) 
 
     app = create_app(
         AgentSpec(),
-        SQLiteSessionStore(tmp_path / "sessions.db"),
-        deps=None,
+        SQLiteRuntimeStore(tmp_path / "runtime.db"),
+        namespace_resolver=local_namespace,
+        deps_resolver=no_deps,
         deps_type=type(None),
         model=FunctionModel(stream_function=respond),
+        model_id="test:function",
     )
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -61,10 +73,12 @@ async def test_failed_stream_is_not_saved_and_returns_a_safe_error(tmp_path) -> 
 
     app = create_app(
         AgentSpec(),
-        SQLiteSessionStore(tmp_path / "sessions.db"),
-        deps=None,
+        SQLiteRuntimeStore(tmp_path / "runtime.db"),
+        namespace_resolver=local_namespace,
+        deps_resolver=no_deps,
         deps_type=type(None),
         model=FunctionModel(stream_function=fail),
+        model_id="test:function",
     )
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -76,7 +90,12 @@ async def test_failed_stream_is_not_saved_and_returns_a_safe_error(tmp_path) -> 
         loaded = (await client.get(f"/v1/sessions/{session['id']}")).json()
 
     assert response.status_code == 200
-    assert _parse_sse(response.text) == [("run_error", '{"detail":"Agent run failed"}')]
+    assert _parse_sse(response.text) == [
+        (
+            "run_error",
+            '{"code":"agent_run_failed","detail":"Agent run failed"}',
+        )
+    ]
     assert loaded["messages"] == []
     assert loaded["revision"] == session["revision"]
     assert "secret provider detail" not in response.text
@@ -94,14 +113,20 @@ async def test_disconnected_stream_is_cancelled_without_saving(tmp_path) -> None
             cancelled.set()
         yield "unreachable"  # pragma: no cover
 
-    store = SQLiteSessionStore(tmp_path / "sessions.db")
-    session = await store.create()
+    store = SQLiteRuntimeStore(tmp_path / "runtime.db")
+    spec = AgentSpec()
+    session = await store.create_session(
+        "local",
+        pin=ExecutionPin.from_spec(spec, model_id="test:function"),
+    )
     app = create_app(
-        AgentSpec(),
+        spec,
         store,
-        deps=None,
+        namespace_resolver=local_namespace,
+        deps_resolver=no_deps,
         deps_type=type(None),
         model=FunctionModel(stream_function=wait_forever),
+        model_id="test:function",
     )
     request_sent = False
 
@@ -140,7 +165,7 @@ async def test_disconnected_stream_is_cancelled_without_saving(tmp_path) -> None
     )
 
     await asyncio.wait_for(cancelled.wait(), timeout=1)
-    loaded = await store.load(session.id)
+    loaded = await store.load_session("local", session.id)
     assert loaded.messages == []
     assert loaded.revision == session.revision
 
@@ -160,10 +185,12 @@ async def test_different_sessions_can_stream_concurrently(tmp_path) -> None:
 
     app = create_app(
         AgentSpec(),
-        SQLiteSessionStore(tmp_path / "sessions.db"),
-        deps=None,
+        SQLiteRuntimeStore(tmp_path / "runtime.db"),
+        namespace_resolver=local_namespace,
+        deps_resolver=no_deps,
         deps_type=type(None),
         model=FunctionModel(stream_function=respond),
+        model_id="test:function",
     )
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:

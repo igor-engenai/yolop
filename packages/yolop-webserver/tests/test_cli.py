@@ -11,7 +11,7 @@ async def test_cli_loads_agentspec_and_uses_loopback_sqlite_defaults(
     monkeypatch,
 ) -> None:
     spec_path = tmp_path / "agent.yaml"
-    spec_path.write_text("name: web-agent\ninstructions: Be concise.\n")
+    spec_path.write_text("name: web-agent\nmodel: openai:test\ninstructions: Be concise.\n")
     started: dict[str, Any] = {}
 
     def start(app: FastAPI, *, host: str, port: int) -> None:
@@ -30,12 +30,12 @@ async def test_cli_loads_agentspec_and_uses_loopback_sqlite_defaults(
     ) as client:
         response = await client.post("/v1/sessions")
     assert response.status_code == 201
-    assert (tmp_path / ".yolop" / "sessions.db").is_file()
+    assert (tmp_path / ".yolop" / "runtime.db").is_file()
 
 
-async def test_cli_can_select_workspace_jsonl_sessions(tmp_path: Path, monkeypatch) -> None:
+async def test_cli_can_select_workspace_runtime_store(tmp_path: Path, monkeypatch) -> None:
     spec_path = tmp_path / "agent.yaml"
-    spec_path.write_text("name: web-agent\n")
+    spec_path.write_text("name: web-agent\nmodel: openai:test\n")
     workspace = tmp_path / "workspace"
     started: dict[str, Any] = {}
 
@@ -48,7 +48,7 @@ async def test_cli_can_select_workspace_jsonl_sessions(tmp_path: Path, monkeypat
             "--agent-spec",
             str(spec_path),
             "--session-backend",
-            "jsonl",
+            "workspace",
             "--session-path",
             str(workspace),
             "--host",
@@ -62,7 +62,8 @@ async def test_cli_can_select_workspace_jsonl_sessions(tmp_path: Path, monkeypat
         transport=ASGITransport(app=started["app"]),
         base_url="http://test",
     ) as client:
-        session_id = (await client.post("/v1/sessions")).json()["id"]
+        response = await client.post("/v1/sessions")
     assert started["host"] == "localhost"
     assert started["port"] == 9000
-    assert (workspace / ".yolop" / "sessions" / f"{session_id}.jsonl").is_file()
+    assert response.status_code == 201
+    assert (workspace / ".yolop" / "runtime.db").is_file()

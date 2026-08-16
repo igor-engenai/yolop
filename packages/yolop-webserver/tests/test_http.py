@@ -1,22 +1,123 @@
 import asyncio
 from collections.abc import AsyncIterator
 
+from fastapi import Request
 from httpx import ASGITransport, AsyncClient
 from pydantic_ai import AgentSpec
 from pydantic_ai.messages import ModelMessage, ModelRequest, UserPromptPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.models.test import TestModel
-from yolop_sqlite_session import SQLiteSessionStore
+from pytest import raises
+from yolop_sqlite_session import SQLiteRuntimeStore
 from yolop_webserver import create_app
+
+
+def local_namespace(_request: Request) -> str:
+    return "local"
+
+
+def no_deps(_namespace: str, _session_id: str) -> None:
+    return None
+
+
+def test_model_object_requires_a_canonical_model_id(tmp_path) -> None:
+    with raises(ValueError, match="model_id is required"):
+        create_app(
+            AgentSpec(),
+            SQLiteRuntimeStore(tmp_path / "runtime.db"),
+            namespace_resolver=local_namespace,
+            deps_resolver=no_deps,
+            deps_type=type(None),
+            model=TestModel(),
+        )
+
+
+async def test_session_crud_is_isolated_by_the_resolved_namespace(tmp_path) -> None:
+    def namespace(request: Request) -> str:
+        return request.headers["x-tenant"]
+
+    app = create_app(
+        AgentSpec(),
+        SQLiteRuntimeStore(tmp_path / "runtime.db"),
+        namespace_resolver=namespace,
+        deps_resolver=lambda _namespace, _session_id: None,
+        deps_type=type(None),
+        model=TestModel(),
+        model_id="test:model",
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        acme = await client.post("/v1/sessions", headers={"x-tenant": "tenant/acme"})
+        beta = await client.post("/v1/sessions", headers={"x-tenant": "tenant/beta"})
+        acme_list = await client.get("/v1/sessions", headers={"x-tenant": "tenant/acme"})
+        beta_list = await client.get("/v1/sessions", headers={"x-tenant": "tenant/beta"})
+        cross_tenant_load = await client.get(
+            f"/v1/sessions/{acme.json()['id']}",
+            headers={"x-tenant": "tenant/beta"},
+        )
+
+    assert acme.status_code == 201
+    assert beta.status_code == 201
+    assert acme_list.json() == {"sessions": [acme.json()["id"]]}
+    assert beta_list.json() == {"sessions": [beta.json()["id"]]}
+    assert cross_tenant_load.status_code == 404
+    assert cross_tenant_load.json()["code"] == "session_not_found"
+
+
+async def test_session_rejects_a_different_agent_pin_before_model_execution(tmp_path) -> None:
+    calls = 0
+
+    async def respond(_messages: list[ModelMessage], _info: AgentInfo) -> AsyncIterator[str]:
+        nonlocal calls
+        calls += 1
+        yield "must not run"
+
+    store = SQLiteRuntimeStore(tmp_path / "runtime.db")
+    first_app = create_app(
+        AgentSpec(name="first"),
+        store,
+        namespace_resolver=local_namespace,
+        deps_resolver=no_deps,
+        deps_type=type(None),
+        model=FunctionModel(stream_function=respond),
+        model_id="test:function",
+    )
+    second_app = create_app(
+        AgentSpec(name="second"),
+        store,
+        namespace_resolver=local_namespace,
+        deps_resolver=no_deps,
+        deps_type=type(None),
+        model=FunctionModel(stream_function=respond),
+        model_id="test:function",
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=first_app), base_url="http://test"
+    ) as client:
+        session_id = (await client.post("/v1/sessions")).json()["id"]
+    async with AsyncClient(
+        transport=ASGITransport(app=second_app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            f"/v1/sessions/{session_id}/runs",
+            json={"prompt": "Hello"},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "session_pin_mismatch"
+    assert calls == 0
 
 
 async def test_client_can_manage_durable_sessions(tmp_path) -> None:
     app = create_app(
         AgentSpec(),
-        SQLiteSessionStore(tmp_path / "sessions.db"),
-        deps=None,
+        SQLiteRuntimeStore(tmp_path / "runtime.db"),
+        namespace_resolver=local_namespace,
+        deps_resolver=no_deps,
         deps_type=type(None),
         model=TestModel(),
+        model_id="test:model",
     )
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -40,7 +141,12 @@ async def test_client_can_manage_durable_sessions(tmp_path) -> None:
         assert (await client.get(f"/v1/sessions/{session['id']}")).status_code == 404
 
 
-async def test_json_run_uses_and_persists_the_session_history(tmp_path) -> None:
+async def test_json_run_uses_request_scoped_deps_and_persists_history(tmp_path) -> None:
+    resolved: list[tuple[str, str]] = []
+
+    def resolve_deps(namespace: str, session_id: str) -> None:
+        resolved.append((namespace, session_id))
+
     async def respond(messages: list[ModelMessage], _info: AgentInfo) -> AsyncIterator[str]:
         request = messages[-1]
         assert isinstance(request, ModelRequest)
@@ -51,10 +157,12 @@ async def test_json_run_uses_and_persists_the_session_history(tmp_path) -> None:
 
     app = create_app(
         AgentSpec(),
-        SQLiteSessionStore(tmp_path / "sessions.db"),
-        deps=None,
+        SQLiteRuntimeStore(tmp_path / "runtime.db"),
+        namespace_resolver=local_namespace,
+        deps_resolver=resolve_deps,
         deps_type=type(None),
         model=FunctionModel(stream_function=respond),
+        model_id="test:function",
     )
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -66,6 +174,7 @@ async def test_json_run_uses_and_persists_the_session_history(tmp_path) -> None:
         loaded = (await client.get(f"/v1/sessions/{session['id']}")).json()
 
     assert response.status_code == 200
+    assert resolved == [("local", session["id"])]
     result = response.json()
     assert result["output"] == "Hello from YoloP"
     assert result["session"] == {
@@ -94,10 +203,12 @@ async def test_runs_for_one_session_wait_and_use_the_latest_history(tmp_path) ->
 
     app = create_app(
         AgentSpec(),
-        SQLiteSessionStore(tmp_path / "sessions.db"),
-        deps=None,
+        SQLiteRuntimeStore(tmp_path / "runtime.db"),
+        namespace_resolver=local_namespace,
+        deps_resolver=no_deps,
         deps_type=type(None),
         model=FunctionModel(stream_function=respond),
+        model_id="test:function",
     )
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:

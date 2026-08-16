@@ -2,14 +2,23 @@ import argparse
 from pathlib import Path
 
 import uvicorn
+from fastapi import Request
 from fastapi.responses import FileResponse
 from pydantic_ai import AgentSpec
-from yolop_sqlite_session import SQLiteSessionStore
+from yolop_sqlite_session import SQLiteRuntimeStore
 from yolop_webserver import create_app
 
 EXAMPLES = Path(__file__).parent
 DEFAULT_SPEC = EXAMPLES / "agents" / "chat.yaml"
 CHAT_PAGE = EXAMPLES / "web_chat.html"
+
+
+def local_namespace(_request: Request) -> str:
+    return "local"
+
+
+def no_deps(_namespace: str, _session_id: str) -> None:
+    return None
 
 
 def parse_args() -> argparse.Namespace:
@@ -25,8 +34,9 @@ def main() -> None:
     args = parse_args()
     app = create_app(
         AgentSpec.from_file(args.agent_spec),
-        SQLiteSessionStore(args.database),
-        deps=None,
+        SQLiteRuntimeStore(args.database),
+        namespace_resolver=local_namespace,
+        deps_resolver=no_deps,
         deps_type=type(None),
     )
 
