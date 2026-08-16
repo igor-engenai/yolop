@@ -18,6 +18,7 @@ Skills = "yolop.skills:Skills"
 
 [dependency-groups]
 dev = [
+    "httpx>=0.28.1",
     "pydantic-ai-slim[openai]>=2.31.0",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
@@ -26,6 +27,7 @@ dev = [
     "yolop-duckdb",
     "yolop-session",
     "yolop-sqlite-session",
+    "yolop-webserver",
     "yolop-workspace",
     "yolop-workspace-session",
 ]
@@ -34,9 +36,11 @@ dev = [
 package = true
 
 [tool.uv.sources]
+yolop = { workspace = true }
 yolop-duckdb = { workspace = true }
 yolop-session = { workspace = true }
 yolop-sqlite-session = { workspace = true }
+yolop-webserver = { workspace = true }
 yolop-workspace = { workspace = true }
 yolop-workspace-session = { workspace = true }
 
@@ -45,6 +49,7 @@ members = [
     "packages/yolop-duckdb",
     "packages/yolop-session",
     "packages/yolop-sqlite-session",
+    "packages/yolop-webserver",
     "packages/yolop-workspace",
     "packages/yolop-workspace-session",
 ]
@@ -57,6 +62,7 @@ testpaths = [
     "packages/yolop-duckdb/tests",
     "packages/yolop-session/tests",
     "packages/yolop-sqlite-session/tests",
+    "packages/yolop-webserver/tests",
     "packages/yolop-workspace/tests",
     "packages/yolop-workspace-session/tests",
 ]

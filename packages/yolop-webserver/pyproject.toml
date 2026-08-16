@@ -1,0 +1,18 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "yolop-webserver"
+version = "0.1.0"
+description = "FastAPI host for YoloP agents"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.116.0,<1",
+    "pydantic-ai-slim>=2.31.0",
+    "yolop>=0.1.0",
+    "yolop-session>=0.1.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["yolop_webserver"]
