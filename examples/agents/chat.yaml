@@ -1,0 +1,8 @@
+model: openai:gpt-5.6-luna
+name: chat
+description: A general conversational agent for the YoloP web example.
+instructions: |
+  Answer the user's questions clearly and directly.
+  State when you do not know an answer.
+model_settings:
+  thinking: minimal

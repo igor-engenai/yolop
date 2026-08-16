@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>YoloP Chat</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      font-family: ui-sans-serif, system-ui, sans-serif;
+      background: #10131a;
+      color: #edf2f7;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: #10131a; }
+    main { width: min(880px, 100%); min-height: 100vh; margin: auto; display: grid; grid-template-rows: auto 1fr auto; }
+    header { padding: 18px 20px; border-bottom: 1px solid #293040; }
+    h1 { margin: 0 0 12px; font-size: 1.25rem; }
+    .session { display: flex; gap: 8px; flex-wrap: wrap; }
+    input, textarea, button { font: inherit; }
+    #session-id { flex: 1 1 420px; min-width: 0; }
+    input, textarea { color: inherit; background: #171c26; border: 1px solid #354056; border-radius: 8px; padding: 10px 12px; }
+    button { color: #fff; background: #315ee8; border: 0; border-radius: 8px; padding: 10px 15px; cursor: pointer; }
+    button.secondary { background: #303849; }
+    button:disabled { cursor: wait; opacity: .6; }
+    #messages { overflow: auto; padding: 24px 20px; display: flex; flex-direction: column; gap: 14px; }
+    .message { max-width: 78%; padding: 12px 15px; border-radius: 14px; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.45; }
+    .user { align-self: flex-end; background: #315ee8; }
+    .assistant { align-self: flex-start; background: #202735; }
+    .error { align-self: center; color: #ffb4b4; background: #3b2025; }
+    form { display: grid; grid-template-columns: 1fr auto; gap: 10px; padding: 16px 20px 22px; border-top: 1px solid #293040; }
+    textarea { resize: vertical; min-height: 48px; max-height: 180px; }
+    @media (max-width: 600px) {
+      .message { max-width: 92%; }
+      form { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>YoloP Chat</h1>
+    <div class="session">
+      <input id="session-id" aria-label="Session ID" placeholder="Session ID">
+      <button id="open-session" class="secondary" type="button">Open</button>
+      <button id="new-session" class="secondary" type="button">New</button>
+    </div>
+  </header>
+  <section id="messages" aria-live="polite"></section>
+  <form id="prompt-form">
+    <textarea id="prompt" required placeholder="Write a message" aria-label="Message"></textarea>
+    <button id="send" type="submit">Send</button>
+  </form>
+</main>
+<script>
+  const messages = document.querySelector("#messages");
+  const sessionInput = document.querySelector("#session-id");
+  const promptInput = document.querySelector("#prompt");
+  const sendButton = document.querySelector("#send");
+
+  function addMessage(role, text = "") {
+    const element = document.createElement("div");
+    element.className = `message ${role}`;
+    element.textContent = text;
+    messages.append(element);
+    messages.scrollTop = messages.scrollHeight;
+    return element;
+  }
+
+  function contentText(content) {
+    return typeof content === "string" ? content : JSON.stringify(content);
+  }
+
+  function renderHistory(history) {
+    messages.replaceChildren();
+    for (const message of history) {
+      if (message.kind === "request") {
+        for (const part of message.parts) {
+          if (part.part_kind === "user-prompt") addMessage("user", contentText(part.content));
+        }
+      } else if (message.kind === "response") {
+        const text = message.parts
+          .filter(part => part.part_kind === "text")
+          .map(part => part.content)
+          .join("");
+        if (text) addMessage("assistant", text);
+      }
+    }
+  }
+
+  function setSession(id) {
+    sessionInput.value = id;
+    const url = new URL(window.location.href);
+    url.searchParams.set("session", id);
+    history.replaceState(null, "", url);
+  }
+
+  async function createSession() {
+    const response = await fetch("/v1/sessions", { method: "POST" });
+    if (!response.ok) throw new Error("Could not create a session");
+    const session = await response.json();
+    setSession(session.id);
+    renderHistory([]);
+  }
+
+  async function openSession(id) {
+    const response = await fetch(`/v1/sessions/${encodeURIComponent(id)}`);
+    if (!response.ok) throw new Error("Could not load this session");
+    const session = await response.json();
+    setSession(session.id);
+    renderHistory(session.messages);
+  }
+
+  function nextBlock(buffer) {
+    const crlf = buffer.indexOf("\r\n\r\n");
+    const lf = buffer.indexOf("\n\n");
+    if (crlf < 0 && lf < 0) return null;
+    if (crlf >= 0 && (lf < 0 || crlf < lf)) return [buffer.slice(0, crlf), crlf + 4];
+    return [buffer.slice(0, lf), lf + 2];
+  }
+
+  function parseEvent(block) {
+    let name = "message";
+    const data = [];
+    for (const line of block.split(/\r?\n/)) {
+      if (line.startsWith("event: ")) name = line.slice(7);
+      if (line.startsWith("data: ")) data.push(line.slice(6));
+    }
+    return data.length ? { name, data: JSON.parse(data.join("\n")) } : null;
+  }
+
+  async function streamPrompt(prompt) {
+    addMessage("user", prompt);
+    const answer = addMessage("assistant");
+    const response = await fetch(
+      `/v1/sessions/${encodeURIComponent(sessionInput.value)}/runs/stream`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", "accept": "text/event-stream" },
+        body: JSON.stringify({ prompt })
+      }
+    );
+    if (!response.ok || !response.body) throw new Error("Could not start the run");
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+      const { value, done } = await reader.read();
+      buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+      let found;
+      while ((found = nextBlock(buffer))) {
+        const [block, end] = found;
+        buffer = buffer.slice(end);
+        const event = parseEvent(block);
+        if (!event) continue;
+        if (event.name === "part_start" && event.data.part.part_kind === "text") {
+          answer.textContent += event.data.part.content;
+        } else if (event.name === "part_delta" && event.data.delta.part_delta_kind === "text") {
+          answer.textContent += event.data.delta.content_delta;
+        } else if (event.name === "run_error") {
+          answer.className = "message error";
+          answer.textContent = event.data.detail;
+        }
+        messages.scrollTop = messages.scrollHeight;
+      }
+      if (done) break;
+    }
+  }
+
+  document.querySelector("#prompt-form").addEventListener("submit", async event => {
+    event.preventDefault();
+    const prompt = promptInput.value.trim();
+    if (!prompt || !sessionInput.value) return;
+    promptInput.value = "";
+    sendButton.disabled = true;
+    try {
+      await streamPrompt(prompt);
+    } catch (error) {
+      addMessage("error", error.message);
+    } finally {
+      sendButton.disabled = false;
+      promptInput.focus();
+    }
+  });
+
+  document.querySelector("#new-session").addEventListener("click", () => {
+    createSession().catch(error => addMessage("error", error.message));
+  });
+
+  document.querySelector("#open-session").addEventListener("click", () => {
+    openSession(sessionInput.value.trim()).catch(error => addMessage("error", error.message));
+  });
+
+  const initialSession = new URL(window.location.href).searchParams.get("session");
+  (initialSession ? openSession(initialSession) : createSession())
+    .catch(error => addMessage("error", error.message));
+</script>
+</body>
+</html>
