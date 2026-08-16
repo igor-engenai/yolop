@@ -35,10 +35,19 @@ def main(argv: Sequence[str] | None = None) -> None:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--agent-spec", type=Path)
-    parser.add_argument("--database", type=Path, default=Path(".yolop/runtime.db"))
-    parser.add_argument("--session")
+    parser = argparse.ArgumentParser(description="Run a YoloP agent in the inline terminal host.")
+    parser.add_argument(
+        "--agent-spec",
+        type=Path,
+        help="AgentSpec YAML file; defaults to the bundled chat agent",
+    )
+    parser.add_argument(
+        "--database",
+        type=Path,
+        default=Path(".yolop/runtime.db"),
+        help="runtime SQLite path (default: .yolop/runtime.db)",
+    )
+    parser.add_argument("--session", help="resume a generated session ID")
     return parser
 
 

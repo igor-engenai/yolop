@@ -23,6 +23,7 @@ You can install smaller feature sets instead:
 - `uv add "yolop[workspace]"` installs the Workspace capability.
 - `uv add "yolop[duckdb]"` installs the DuckDB capability.
 - `uv add "yolop[web]"` installs the web host and its runtime persistence.
+- `uv add "yolop[tui,openai]"` installs the terminal host and OpenAI model support.
 - `uv add "yolop[openai]"` installs OpenAI model support.
 
 The feature packages remain separate Python distributions. A package index must contain compatible `0.1.x` releases of each selected YoloP distribution. For development in this repository, use `uv sync --all-packages`.
@@ -46,6 +47,43 @@ The coding AgentSpec selects:
 The host supplies the workspace path through dependencies. AgentSpec cannot select an arbitrary host directory. Shell subprocesses do not receive common LLM API keys, including OpenAI and Azure OpenAI keys.
 
 The API key is not part of AgentSpec. Pydantic AI reads `OPENAI_API_KEY` from the environment. An Azure AgentSpec can use `azure:<deployment-name>` with `AZURE_OPENAI_API_KEY` and `AZURE_OPENAI_ENDPOINT`. Legacy Azure endpoints also need `OPENAI_API_VERSION`.
+
+## Run the terminal host
+
+Start the bundled chat AgentSpec:
+
+```bash
+export OPENAI_API_KEY="your-key"
+uv run yolop
+```
+
+Use an external AgentSpec instead:
+
+```bash
+uv run yolop --agent-spec examples/agents/chat.yaml
+```
+
+The packaged command uses dependency-free host values. An AgentSpec that needs Workspace or another host resource needs an embedding host that injects those native dependencies. Run the coding composition example with:
+
+```bash
+uv run python examples/coding_tui.py
+```
+
+The TUI is a true inline macOS/Linux terminal application. It keeps normal terminal scrollback and has one Pi-like multiline editor plus one status line. It stores exact Pydantic AI session history in project-local `.yolop/runtime.db`. A new session starts by default. Use `--session <id>` or `/resume` to continue one.
+
+While a run streams, Enter sends a native `asap` steering message. Escape cancels the run and saves its partial history. The main keys are:
+
+- Enter: submit or steer;
+- Shift+Enter or Ctrl+J: insert a newline;
+- Escape: cancel the active run;
+- Ctrl+C: clear the editor;
+- Ctrl+D: exit when the editor is empty;
+- Ctrl+O: show or hide tool details;
+- Ctrl+T: show or hide thinking.
+
+The only built-in commands are `/new`, `/resume`, `/help`, and `/quit`. Type `@` to fuzzy-complete project files. Text attachments must stay inside the project, use UTF-8, contain no null bytes, remain below 256 KiB each, and remain below 1 MiB in total.
+
+V1 does not include model switching, direct shell mode, images, an external editor, branching, remote-server mode, custom themes, custom keybindings, TUI extensions, or a native Windows support promise.
 
 ## Use workspace sessions
 
@@ -160,7 +198,7 @@ result = run.result
 messages = run.all_messages()
 ```
 
-YoloP returns Pydantic AI's native `AgentRunEvents` handle. It does not wrap events, results, messages, or dependencies.
+YoloP returns Pydantic AI's native `AgentRunEvents` handle. It does not wrap events, results, messages, or dependencies. `Yolop.execute(...)` is the run-to-completion form for hosts that need Pydantic AI's native event handler and `RunContext`, including steering and cancellation.
 
 ## Packages
 
@@ -179,6 +217,10 @@ The core package contains the stateless runtime, AgentSpec capability discovery,
 ### `yolop-webserver`
 
 [`packages/yolop-webserver`](packages/yolop-webserver) is the FastAPI host. It provides request-scoped namespace and dependency resolution, JSON and SSE APIs, durable supervised runs, event replay, bounded admission, and a loopback CLI. The chat page remains under [`examples/`](examples/).
+
+### `yolop-tui`
+
+[`packages/yolop-tui`](packages/yolop-tui) is the minimal inline terminal host. It owns prompt_toolkit and Rich, the `yolop` command, a bundled fallback chat AgentSpec, native steering and cancellation, compact tool and thinking views, `@file` policy, and local session selection. It accepts native host dependencies through `run_tui(...)` and does not depend on Workspace or DuckDB.
 
 ### `yolop-duckdb`
 
