@@ -122,7 +122,7 @@ async def test_inline_terminal_redraws_mutable_content_after_resize() -> None:
     assert "╭─ prompt " + "─" * 21 + "╮" in normalized
 
 
-async def test_ctrl_c_clears_and_ctrl_d_exits_only_with_empty_editor() -> None:
+async def test_ctrl_c_clears_nonempty_input_and_exits_when_idle_and_empty() -> None:
     submitted: list[str] = []
     output = CapturingOutput()
 
@@ -142,7 +142,10 @@ async def test_ctrl_c_clears_and_ctrl_d_exits_only_with_empty_editor() -> None:
             pipe_input.send_bytes(b"\x04")
             await asyncio.sleep(0.01)
             assert not running.done()
-            pipe_input.send_bytes(b"\x03\x04")
+            pipe_input.send_bytes(b"\x03")
+            await asyncio.sleep(0.01)
+            assert not running.done()
+            pipe_input.send_bytes(b"\x03")
             await asyncio.wait_for(running, timeout=1)
 
     assert submitted == []

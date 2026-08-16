@@ -29,7 +29,7 @@ from pydantic_ai.models.function import (
     FunctionModel,
 )
 from pydantic_ai.toolsets.function import FunctionToolset
-from pytest import MonkeyPatch, raises
+from pytest import MonkeyPatch, mark, raises
 from yolop_session import ExecutionPin, SessionPinMismatchError
 from yolop_sqlite_session import SQLiteRuntimeStore
 from yolop_tui import run_tui
@@ -315,7 +315,11 @@ async def test_input_during_a_run_steers_the_same_native_agent_run(tmp_path: Pat
     assert request_run_ids[0] == request_run_ids[1]
 
 
-async def test_escape_cancels_and_saves_partial_native_history(tmp_path: Path) -> None:
+@mark.parametrize("cancel_key", [b"\x1b", b"\x03"], ids=["escape", "ctrl-c"])
+async def test_cancel_key_saves_partial_native_history(
+    tmp_path: Path,
+    cancel_key: bytes,
+) -> None:
     model_stopped = asyncio.Event()
     wait_forever = asyncio.Event()
 
@@ -348,8 +352,9 @@ async def test_escape_cancels_and_saves_partial_native_history(tmp_path: Path) -
             await _wait_for_output(output, "╭─ prompt")
             pipe_input.send_text("Start and stop\r")
             await _wait_for_output(output, "Partial answer")
-            pipe_input.send_bytes(b"\x1b")
+            pipe_input.send_bytes(cancel_key)
             await asyncio.wait_for(model_stopped.wait(), timeout=1)
+            assert not running.done()
             session_id = (await store.list_sessions("test"))[0]
             async with asyncio.timeout(1):
                 while not (await store.load_session("test", session_id)).messages:

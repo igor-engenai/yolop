@@ -76,7 +76,7 @@ While a run streams, Enter sends a native `asap` steering message. Escape cancel
 - Enter: submit or steer;
 - Shift+Enter or Ctrl+J: insert a newline;
 - Escape: cancel the active run;
-- Ctrl+C: clear the editor;
+- Ctrl+C: cancel an active run, clear non-empty input, or exit when idle and empty;
 - Ctrl+D: exit when the editor is empty;
 - Ctrl+O: show or hide tool details;
 - Ctrl+T: show or hide thinking.

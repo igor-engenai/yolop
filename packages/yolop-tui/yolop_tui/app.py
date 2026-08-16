@@ -92,9 +92,11 @@ async def run_tui[DepsT](
         else:
             active_turn.enqueue(text)
 
-    def cancel() -> None:
-        if active_turn is not None:
-            active_turn.cancel()
+    def cancel() -> bool:
+        if active_turn is None:
+            return False
+        active_turn.cancel()
+        return True
 
     def set_active(turn: _ActiveTurn | None) -> None:
         nonlocal active_turn

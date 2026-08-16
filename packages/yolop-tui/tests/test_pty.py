@@ -11,7 +11,7 @@ import pytest
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="Unix pseudo-terminal test")
 
 
-def test_cli_runs_inline_in_a_real_pseudo_terminal(tmp_path: Path) -> None:
+def test_cli_runs_inline_and_ctrl_c_exits_in_a_real_pseudo_terminal(tmp_path: Path) -> None:
     master, slave = pty.openpty()
     environment = {**os.environ, "TERM": "xterm-256color"}
     process = subprocess.Popen(
@@ -33,7 +33,7 @@ def test_cli_runs_inline_in_a_real_pseudo_terminal(tmp_path: Path) -> None:
                 output.extend(os.read(master, 65536))
         assert b"prompt" in output
 
-        os.write(master, b"/quit\r")
+        os.write(master, b"\x03")
         assert process.wait(timeout=5) == 0
         while True:
             readable, _, _ = select.select([master], [], [], 0)

@@ -36,7 +36,7 @@ class InlineTerminal:
         self,
         *,
         on_submit: Callable[[str], None],
-        on_cancel: Callable[[], None] | None = None,
+        on_cancel: Callable[[], bool | None] | None = None,
         on_toggle_tools: Callable[[], None] | None = None,
         on_toggle_thinking: Callable[[], None] | None = None,
         completer: Completer | None = None,
@@ -156,8 +156,11 @@ class InlineTerminal:
                 self._on_cancel()
 
         @bindings.add("c-c")
-        def clear_editor(_event) -> None:
-            self._buffer.reset()
+        def interrupt(_event) -> None:
+            if self._buffer.text:
+                self._buffer.reset()
+            elif self._on_cancel() is not True:
+                self.stop()
 
         @bindings.add("c-o")
         def toggle_tools(_event) -> None:
