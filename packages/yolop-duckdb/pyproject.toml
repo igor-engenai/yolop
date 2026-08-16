@@ -1,0 +1,19 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "yolop-duckdb"
+version = "0.1.0"
+description = "Host-resolved DuckDB query capability for YoloP"
+requires-python = ">=3.12"
+dependencies = [
+    "duckdb>=1.4.0,<2",
+    "pydantic-ai-slim>=2.31.0",
+]
+
+[project.entry-points."yolop.capabilities"]
+DuckDB = "yolop_duckdb:DuckDB"
+
+[tool.hatch.build.targets.wheel]
+packages = ["yolop_duckdb"]

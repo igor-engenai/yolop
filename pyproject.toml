@@ -23,6 +23,7 @@ dev = [
     "pytest-asyncio>=1.4.0",
     "ruff>=0.16.3",
     "ty>=0.0.72",
+    "yolop-duckdb",
     "yolop-workspace",
     "yolop-workspace-session",
 ]
@@ -31,17 +32,23 @@ dev = [
 package = true
 
 [tool.uv.sources]
+yolop-duckdb = { workspace = true }
 yolop-workspace = { workspace = true }
 yolop-workspace-session = { workspace = true }
 
 [tool.uv.workspace]
-members = ["packages/yolop-workspace", "packages/yolop-workspace-session"]
+members = [
+    "packages/yolop-duckdb",
+    "packages/yolop-workspace",
+    "packages/yolop-workspace-session",
+]
 
 [tool.pytest.ini_options]
 addopts = "-q"
 asyncio_mode = "auto"
 testpaths = [
     "tests",
+    "packages/yolop-duckdb/tests",
     "packages/yolop-workspace/tests",
     "packages/yolop-workspace-session/tests",
 ]
