@@ -3,6 +3,7 @@ import asyncio
 from rich.text import Text
 from textual import events
 from textual.containers import VerticalScroll
+from textual.pilot import Pilot
 from textual.widgets import Input, OptionList, Static, TextArea
 from yolop_tui.selection import SelectionOption
 from yolop_tui.textual_app import TextualTerminal
@@ -117,6 +118,31 @@ async def test_textual_editor_completes_commands_and_project_files(tmp_path) -> 
         await pilot.press("tab")
         await pilot.pause()
         assert editor.text == "@src/answer.py"
+
+
+async def test_textual_session_picker_opens_from_external_run_task() -> None:
+    picker_requested = asyncio.Event()
+
+    async def drive(pilot: Pilot) -> None:
+        await picker_requested.wait()
+        await pilot.pause()
+        await pilot.press("t", "g", "t", "enter")
+
+    terminal = TextualTerminal(on_submit=lambda _text: None, auto_pilot=drive)
+    options = [
+        SelectionOption("first", "first-id  Earlier conversation"),
+        SelectionOption("target", "target-id  Target conversation"),
+    ]
+    running = asyncio.create_task(terminal.run())
+
+    try:
+        await asyncio.wait_for(terminal.wait_until_ready(), timeout=1)
+        selected = asyncio.create_task(terminal.choose(options))
+        picker_requested.set()
+        assert await asyncio.wait_for(selected, timeout=1) == "target"
+    finally:
+        terminal.stop()
+        await running
 
 
 async def test_textual_session_picker_fuzzy_selects_and_cancels() -> None:

@@ -9,6 +9,7 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pytest import MonkeyPatch
 from textual.pilot import Pilot
 from textual.widgets import Static
+from yolop_session import ExecutionPin
 from yolop_sqlite_session import SQLiteRuntimeStore
 from yolop_tui import run_tui
 from yolop_tui.textual_app import TextualTerminal
@@ -59,6 +60,67 @@ async def test_textual_tui_streams_and_persists_a_native_turn(
     assert isinstance(response, ModelResponse)
     assert isinstance(response.parts[-1], TextPart)
     assert response.parts[-1].content == "Textual model answer"
+
+
+async def test_textual_resume_opens_modal_and_selects_a_session(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    calls = 0
+
+    async def respond(
+        _messages: list[ModelMessage],
+        _info: AgentInfo,
+    ) -> AsyncIterator[str]:
+        nonlocal calls
+        calls += 1
+        yield "unexpected"
+
+    spec = AgentSpec()
+    store = SQLiteRuntimeStore(tmp_path / "runtime.db")
+    target = await store.create_session(
+        "test",
+        pin=ExecutionPin.from_spec(spec, model_id="test:model"),
+    )
+    target = await store.replace_session(
+        "test",
+        target.id,
+        expected_revision=target.revision,
+        messages=[
+            ModelRequest(parts=[UserPromptPart("Target conversation")]),
+            ModelResponse(parts=[TextPart("Existing answer")]),
+        ],
+    )
+
+    async def drive(pilot: Pilot) -> None:
+        await pilot.press(*"/resume", "enter")
+        async with asyncio.timeout(1):
+            while not pilot.app.screen.query("#session-filter"):
+                await pilot.pause(0.01)
+        await pilot.press("t", "g", "t", "enter")
+        status = pilot.app.query_one("#status", Static)
+        async with asyncio.timeout(1):
+            while target.id[:8] not in str(status.render()):
+                await pilot.pause(0.01)
+        await pilot.press(*"/quit", "enter")
+
+    def terminal_factory(**kwargs) -> TextualTerminal:
+        return TextualTerminal(**kwargs, auto_pilot=drive)
+
+    monkeypatch.setattr(tui_app, "_TERMINAL_FACTORY", terminal_factory)
+
+    await run_tui(
+        spec,
+        store=store,
+        namespace="test",
+        deps=None,
+        deps_type=type(None),
+        model=FunctionModel(stream_function=respond),
+        model_id="test:model",
+        cwd=tmp_path,
+    )
+
+    assert calls == 0
 
 
 async def test_textual_ctrl_c_cancels_and_saves_partial_history(

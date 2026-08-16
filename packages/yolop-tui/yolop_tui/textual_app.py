@@ -194,9 +194,11 @@ class _SessionPicker(ModalScreen[str | None]):
         self._matches = self._options
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="session-picker"):
-            yield Input(placeholder="Filter sessions", id="session-filter")
-            yield OptionList(id="session-options")
+        yield Vertical(
+            Input(placeholder="Filter sessions", id="session-filter"),
+            OptionList(id="session-options"),
+            id="session-picker",
+        )
 
     def on_mount(self) -> None:
         self.query_one("#session-filter", Input).focus()
@@ -469,7 +471,13 @@ class TextualTerminal:
             if not future.done():
                 future.set_result(value)
 
-        self.app.push_screen(_SessionPicker(options), callback=selected)
+        scheduled = self.app.call_later(
+            self.app.push_screen,
+            _SessionPicker(options),
+            selected,
+        )
+        if not scheduled:
+            raise RuntimeError("cannot open the session picker after the TUI has stopped")
         return await future
 
     def set_transcript(self, renderable: RenderableType) -> None:
