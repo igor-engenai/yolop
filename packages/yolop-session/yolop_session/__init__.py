@@ -283,45 +283,6 @@ class RuntimeStore(Protocol):
     async def interrupt_expired_runs(self) -> int: ...
 
 
-@dataclass(frozen=True)
-class SessionSnapshot:
-    """A session history at one content revision."""
-
-    id: str
-    messages: list[ModelMessage]
-    revision: str
-
-
-class SessionStore(Protocol):
-    """Persistence operations required by a YoloP session host."""
-
-    async def create(self) -> SessionSnapshot:
-        """Create and return an empty session with a generated ID."""
-        ...
-
-    async def list_sessions(self) -> list[str]:
-        """List session IDs in stable order."""
-        ...
-
-    async def load(self, session_id: str) -> SessionSnapshot:
-        """Load one session and its content revision."""
-        ...
-
-    async def delete(self, session_id: str, *, expected_revision: str) -> None:
-        """Delete a session if its revision is current."""
-        ...
-
-    async def replace(
-        self,
-        session_id: str,
-        *,
-        expected_revision: str,
-        messages: Sequence[ModelMessage],
-    ) -> SessionSnapshot:
-        """Atomically replace a session's complete message history."""
-        ...
-
-
 def ensure_session_pin(session: RuntimeSessionSnapshot, expected: ExecutionPin) -> None:
     """Reject execution through configuration other than the session pin."""
     if session.pin != expected:
@@ -387,8 +348,6 @@ __all__ = [
     "SessionLockTimeoutError",
     "SessionNotFoundError",
     "SessionPinMismatchError",
-    "SessionSnapshot",
-    "SessionStore",
     "StoredRunEvent",
     "agent_spec_digest",
     "ensure_session_pin",

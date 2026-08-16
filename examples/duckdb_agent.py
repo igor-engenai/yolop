@@ -6,7 +6,7 @@ from pathlib import Path
 
 import duckdb
 from pydantic_ai import AgentSpec
-from yolop_session import ExecutionPin
+from yolop_session import ExecutionPin, ensure_session_pin
 from yolop_workspace_session import WorkspaceRuntimeStore
 
 from yolop import Yolop
@@ -45,6 +45,7 @@ async def main() -> None:
         if args.session
         else await store.create_session("local", pin=pin)
     )
+    ensure_session_pin(session, pin)
     print(f"session: {session.id}")
 
     connection = duckdb.connect(

@@ -5,14 +5,9 @@ build-backend = "hatchling.build"
 [project]
 name = "yolop-workspace-session"
 version = "0.1.0"
-description = "Workspace JSONL session persistence for YoloP hosts"
+description = "Workspace-local runtime persistence for YoloP hosts"
 requires-python = ">=3.12"
-dependencies = [
-    "filelock>=3.20.0",
-    "pydantic-ai-slim>=2.31.0",
-    "yolop-session>=0.1.0",
-    "yolop-sqlite-session>=0.1.0",
-]
+dependencies = ["yolop-sqlite-session>=0.1.0"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["yolop_workspace_session"]

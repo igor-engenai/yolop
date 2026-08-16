@@ -11,3 +11,5 @@ model_settings:
 capabilities:
   - DuckDB:
       max_rows: 200
+      max_result_bytes: 1048576
+      timeout_seconds: 30

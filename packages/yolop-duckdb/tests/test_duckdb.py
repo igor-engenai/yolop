@@ -52,6 +52,17 @@ def test_max_rows_must_be_positive() -> None:
         )
 
 
+def test_result_byte_limit_must_be_positive() -> None:
+    with raises(ValueError, match="max_result_bytes must be positive"):
+        Yolop().run(
+            {"capabilities": [{"DuckDB": {"max_result_bytes": 0}}]},
+            "Query data.",
+            model=FunctionModel(stream_function=_unused_stream),
+            deps=None,
+            deps_type=type(None),
+        )
+
+
 def test_timeout_must_be_positive() -> None:
     with raises(ValueError, match="timeout_seconds must be positive"):
         Yolop().run(
@@ -310,6 +321,58 @@ def test_cancellation_waits_for_the_duckdb_worker_to_exit(tmp_path: Path) -> Non
             connection.close()
 
     asyncio.run(scenario())
+
+
+@mark.parametrize(
+    "sql",
+    [
+        "select repeat('x', 1000) as value",
+        "select repeat('x', 20) as value from range(10)",
+    ],
+)
+async def test_oversized_result_is_rejected_before_it_reaches_the_model(
+    tmp_path: Path,
+    sql: str,
+) -> None:
+    connection = read_only_connection(tmp_path)
+
+    async def respond(
+        messages: list[ModelMessage], _info: AgentInfo
+    ) -> AsyncIterator[str | DeltaToolCalls]:
+        retries = [
+            part
+            for message in messages
+            if isinstance(message, ModelRequest)
+            for part in message.parts
+            if isinstance(part, RetryPromptPart)
+        ]
+        if not retries:
+            yield {
+                0: DeltaToolCall(
+                    name="query_duckdb",
+                    json_args=json.dumps({"sql": sql}),
+                    tool_call_id="large-result",
+                )
+            }
+        else:
+            assert "exceeded 100 bytes" in str(retries[-1].content)
+            yield "Large result rejected"
+
+    try:
+        async with Yolop().run(
+            {"capabilities": [{"DuckDB": {"max_result_bytes": 100}}]},
+            "Return a large value.",
+            model=FunctionModel(stream_function=respond),
+            deps=HostDeps(duckdb_connection=connection),
+            deps_type=HostDeps,
+        ) as run:
+            events = [event async for event in run]
+    finally:
+        connection.close()
+
+    final_event = events[-1]
+    assert isinstance(final_event, AgentRunResultEvent)
+    assert final_event.result.output == "Large result rejected"
 
 
 async def test_parallel_tool_calls_share_one_host_connection_safely(tmp_path: Path) -> None:

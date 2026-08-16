@@ -24,6 +24,7 @@ from yolop_session import (
     IdempotencyConflictError,
     InvalidSessionIdError,
     RunAdmissionError,
+    RunNotFoundError,
     RunStateError,
     RunStatus,
     RuntimeRunSnapshot,
@@ -601,6 +602,10 @@ def _install_runtime_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(SessionConflictError)
     async def session_conflict(_request: Request, error: SessionConflictError) -> JSONResponse:
         return _error_response(409, error.code, str(error))
+
+    @app.exception_handler(RunNotFoundError)
+    async def run_not_found(_request: Request, error: RunNotFoundError) -> JSONResponse:
+        return _error_response(404, error.code, str(error))
 
     @app.exception_handler(RunAdmissionError)
     async def run_queue_full(_request: Request, error: RunAdmissionError) -> JSONResponse:

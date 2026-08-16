@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "yolop-session"
 version = "0.1.0"
-description = "Session persistence contract for YoloP hosts"
+description = "Runtime persistence contract for YoloP hosts"
 requires-python = ">=3.12"
 dependencies = ["pydantic-ai-slim>=2.31.0"]
 

@@ -10,6 +10,7 @@ from pydantic_ai.capabilities import AbstractCapability
 from pydantic_ai.exceptions import UserError
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
+from pydantic_core import to_json
 
 
 class DuckDBDeps(Protocol):
@@ -24,11 +25,14 @@ class DuckDB(AbstractCapability[Any]):
     """Provide read-only SQL access to a host-opened DuckDB connection."""
 
     max_rows: int = 200
+    max_result_bytes: int = 1_048_576
     timeout_seconds: float = 30
 
     def __post_init__(self) -> None:
         if self.max_rows < 1:
             raise ValueError("max_rows must be positive")
+        if self.max_result_bytes < 1:
+            raise ValueError("max_result_bytes must be positive")
         if self.timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive")
 
@@ -45,6 +49,7 @@ class DuckDB(AbstractCapability[Any]):
         return _DuckDBRun(
             connection=connection,
             max_rows=self.max_rows,
+            max_result_bytes=self.max_result_bytes,
             timeout_seconds=self.timeout_seconds,
         )
 
@@ -53,6 +58,7 @@ class DuckDB(AbstractCapability[Any]):
 class _DuckDBRun(AbstractCapability[Any]):
     connection: duckdb.DuckDBPyConnection
     max_rows: int
+    max_result_bytes: int
     timeout_seconds: float
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
     _toolset: FunctionToolset[Any] = field(init=False, repr=False)
@@ -76,7 +82,13 @@ class _DuckDBRun(AbstractCapability[Any]):
         """Run one read-only SQL query against the host-provided DuckDB database."""
         async with self._lock:
             worker = asyncio.create_task(
-                asyncio.to_thread(_query, self.connection, sql, self.max_rows)
+                asyncio.to_thread(
+                    _query,
+                    self.connection,
+                    sql,
+                    self.max_rows,
+                    self.max_result_bytes,
+                )
             )
             try:
                 return await asyncio.wait_for(
@@ -126,6 +138,7 @@ def _query(
     connection: duckdb.DuckDBPyConnection,
     sql: str,
     max_rows: int,
+    max_result_bytes: int,
 ) -> dict[str, Any]:
     try:
         statements = duckdb.extract_statements(sql)
@@ -139,14 +152,34 @@ def _query(
     try:
         connection.execute(sql)
         columns = [description[0] for description in connection.description]
-        rows = connection.fetchmany(max_rows + 1)
+        result_bytes = len(to_json({"columns": columns, "rows": [], "truncated": False}))
+        if result_bytes > max_result_bytes:
+            raise ModelRetry(
+                f"DuckDB result exceeded {max_result_bytes} bytes; request less data"
+            )
+        rows: list[list[Any]] = []
+        truncated = False
+        for index in range(max_rows + 1):
+            raw_row = connection.fetchone()
+            if raw_row is None:
+                break
+            if index == max_rows:
+                truncated = True
+                break
+            row = list(raw_row)
+            result_bytes += len(to_json(row)) + (1 if rows else 0)
+            if result_bytes > max_result_bytes:
+                raise ModelRetry(
+                    f"DuckDB result exceeded {max_result_bytes} bytes; request less data"
+                )
+            rows.append(row)
     except duckdb.Error as error:
         raise ModelRetry(f"DuckDB query failed: {error}") from error
 
     return {
         "columns": columns,
-        "rows": [list(row) for row in rows[:max_rows]],
-        "truncated": len(rows) > max_rows,
+        "rows": rows,
+        "truncated": truncated,
     }
 
 

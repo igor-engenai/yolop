@@ -2,7 +2,7 @@
 
 YoloP is a small runtime for agents defined with Pydantic AI `AgentSpec`.
 
-The core is stateless. Pydantic AI owns the model and tool loop. AgentSpec selects installed capability code. Hosts own AgentSpec files, dependencies, history, persistence, and transport.
+The core is stateless. Pydantic AI owns the model and tool loop. AgentSpec selects installed capability code. Hosts own AgentSpec files, trusted namespaces, dependencies, persistence, and transport.
 
 ## Try the coding AgentSpec
 
@@ -41,20 +41,19 @@ uv run python examples/session_agent.py \
   "Continue the previous task"
 ```
 
-The host explicitly loads and saves the session around `Yolop.run()`. Each session is stored at `.yolop/sessions/<session-id>.jsonl` in the current workspace. A save passes the loaded revision and atomically replaces the full history with `run.all_messages()`.
+The host explicitly loads and saves the session around `Yolop.run()`. `WorkspaceRuntimeStore` stores namespaced sessions and runs in `.yolop/runtime.db`. A session pins the canonical AgentSpec digest and resolved model ID. A save uses the loaded revision and atomically replaces the exact Pydantic AI message history.
+
+This is a breaking storage format. The runtime store rejects old 0.1 session databases and JSONL files. It does not migrate them.
 
 ## Query DuckDB with a session
-
-Create a session for an existing database:
 
 ```bash
 uv run python examples/duckdb_agent.py \
   --database analytics.duckdb \
   "Show total revenue by month"
-# session: 68a094a7-3953-4f89-9acf-d60dc343d529
 ```
 
-Resume the session against the same database:
+Resume the generated session against the same database:
 
 ```bash
 uv run python examples/duckdb_agent.py \
@@ -63,18 +62,22 @@ uv run python examples/duckdb_agent.py \
   "Now group the result by customer segment"
 ```
 
-The host opens the database read-only with external access disabled and passes the connection through `deps.duckdb_connection`. AgentSpec contains no database path. The capability requires this secure connection setting, accepts one DuckDB SELECT-class statement per tool call, and returns at most the AgentSpec `max_rows` value.
+The host opens the database with `read_only=True` and `enable_external_access=false`. The capability verifies both settings before it exposes the tool. It accepts one DuckDB SELECT-class statement per call. AgentSpec can set:
+
+- `max_rows`, default `200`;
+- `max_result_bytes`, default `1048576`;
+- `timeout_seconds`, default `30`.
+
+Timeout or cancellation interrupts DuckDB and waits for the worker to exit before the connection lock is released.
 
 ## Run the web chat
-
-Set the model credential and start the example:
 
 ```bash
 export OPENAI_API_KEY="your-key"
 uv run python examples/web_chat.py
 ```
 
-Open <http://127.0.0.1:8000>. The page creates a durable session and puts its ID in the URL. Reloading the URL restores the exact stored history. The page can also open another session ID.
+Open <http://127.0.0.1:8000>. The page creates a durable session and puts its ID in the URL. Reloading the URL restores the exact stored history.
 
 The reusable command serves only the HTTP API:
 
@@ -82,16 +85,16 @@ The reusable command serves only the HTTP API:
 uv run yolop-webserver --agent-spec examples/agents/chat.yaml
 ```
 
-It loads one AgentSpec YAML file at startup, binds to `127.0.0.1`, and stores sessions in `.yolop/sessions.db` by default. Select workspace JSONL explicitly:
+It binds to `127.0.0.1` and stores runtime state in `.yolop/runtime.db` by default. Select a workspace-local database explicitly:
 
 ```bash
 uv run yolop-webserver \
   --agent-spec examples/agents/chat.yaml \
-  --session-backend jsonl \
+  --session-backend workspace \
   --session-path .
 ```
 
-The first API version provides:
+The API provides:
 
 ```text
 POST   /v1/sessions
@@ -102,9 +105,20 @@ POST   /v1/sessions/{session_id}/runs
 POST   /v1/sessions/{session_id}/runs/stream
 ```
 
-Both run endpoints accept `{"prompt": "user text"}`. The JSON endpoint returns native output and usage after the new history is durable. The streaming endpoint sends native Pydantic AI events as SSE, followed by `run_completed`. `GET /v1/sessions/{session_id}` returns the exact stored Pydantic AI message JSON. A disconnected stream is cancelled and is not saved. Runs for one session wait for each other; separate sessions can run concurrently.
+Both run endpoints accept `{"prompt": "user text"}` and require an `Idempotency-Key` header. Reusing a key with the same prompt returns the same durable run. Reusing it with different input returns `409 idempotency_conflict`.
 
-Authentication is host policy. The generic package does not add authentication. Do not bind the example or bare CLI to a public interface. An embedding host can add FastAPI authentication middleware and inject capability dependencies through `create_app(...)`.
+The JSON endpoint waits for durable completion. The SSE endpoint replays persisted native Pydantic AI events with sequence IDs, follows new events, and ends with `run_completed` or `run_error`. A client disconnect only detaches the stream. The accepted background run continues. Reconnect by sending the same POST and idempotency key.
+
+Default admission limits are:
+
+- 8 active model runs per process;
+- 8 nonterminal runs per session;
+- 64 supervised background runs per process;
+- 30 seconds to acquire a session lock.
+
+Hosts can change these values with `RunLimits`. Excess work fails with `429 run_queue_full`. A lock timeout fails with `503 session_lock_timeout`.
+
+Authentication remains host policy. `create_app(...)` requires a trusted `namespace_resolver(Request)` and a per-session `deps_resolver(namespace, session_id)`. The client cannot choose the persistence namespace. An authenticated multi-user host must map its verified tenant identity to that resolver. Do not bind the example or bare CLI to a public interface.
 
 ## Runtime API
 
@@ -129,60 +143,36 @@ YoloP returns Pydantic AI's native `AgentRunEvents` handle. It does not wrap eve
 
 ### `yolop`
 
-The core package contains:
-
-- the stateless runtime;
-- AgentSpec-based capability discovery;
-- the generic Skills capability and bundled default skills.
-
-It does not contain agent-specific AgentSpec files, Workspace code, DuckDB code, session persistence, FastAPI, model providers, or `pydantic-ai-harness`.
+The core package contains the stateless runtime, AgentSpec capability discovery, the generic Skills capability, and bundled default skills. It does not contain agent-specific AgentSpecs, Workspace code, DuckDB, persistence, FastAPI, model providers, or `pydantic-ai-harness`.
 
 ### `yolop-session`
 
-[`packages/yolop-session`](packages/yolop-session) defines the storage-independent `SessionStore` protocol, snapshots, errors, and generated session identity. Concrete stores implement this protocol structurally; they do not inherit from it.
+[`packages/yolop-session`](packages/yolop-session) defines one storage-independent `RuntimeStore` protocol. It owns namespaced session and run values, execution pins, durable event values, stable errors, and generated identity helpers.
 
 ### `yolop-sqlite-session`
 
-[`packages/yolop-sqlite-session`](packages/yolop-sqlite-session) stores exact native Pydantic AI messages in SQLite. It uses atomic full-history replacement, revision checks, and SQLite transactions. It is the default web-server store.
+[`packages/yolop-sqlite-session`](packages/yolop-sqlite-session) implements `RuntimeStore` with SQLite. It provides atomic session/run completion, revision checks, idempotent run reservation, ordered events, worker leases, namespace isolation, and cross-worker file locks. It is the default web-server store.
 
 ### `yolop-webserver`
 
-[`packages/yolop-webserver`](packages/yolop-webserver) is the FastAPI host. It provides a generic application factory, JSON and SSE APIs, per-session run serialization, and a loopback CLI. The application factory accepts a `SessionStore` and host-owned dependencies. The chat page remains under [`examples/`](examples/).
+[`packages/yolop-webserver`](packages/yolop-webserver) is the FastAPI host. It provides request-scoped namespace and dependency resolution, JSON and SSE APIs, durable supervised runs, event replay, bounded admission, and a loopback CLI. The chat page remains under [`examples/`](examples/).
 
 ### `yolop-duckdb`
 
-[`packages/yolop-duckdb`](packages/yolop-duckdb) is a separate capability plugin. It owns the DuckDB dependency, resolves a host-provided connection, and exposes the `query_duckdb` model tool. Its entry point is loaded only when AgentSpec selects `DuckDB`.
+[`packages/yolop-duckdb`](packages/yolop-duckdb) is a separate capability plugin. It owns the DuckDB dependency, resolves a host-provided read-only connection, and exposes the bounded `query_duckdb` model tool.
 
 ### `yolop-workspace`
 
-[`packages/yolop-workspace`](packages/yolop-workspace) is a separate first-party capability plugin. It owns:
-
-- the `Workspace` capability;
-- the `pydantic-ai-harness` dependency;
-- filesystem and shell composition;
-- host workspace dependency requirements;
-- shell credential filtering.
-
-The shell command allowlist is agent policy. It is explicit in the external coding AgentSpec, not a Python default.
+[`packages/yolop-workspace`](packages/yolop-workspace) owns the AgentSpec-selectable Workspace capability, `pydantic-ai-harness`, filesystem and shell composition, host workspace dependency requirements, and shell credential filtering. The shell command allowlist is explicit AgentSpec policy.
 
 ### `yolop-workspace-session`
 
-[`packages/yolop-workspace-session`](packages/yolop-workspace-session) implements `SessionStore` with workspace JSONL files. It provides multiple generated sessions with native Pydantic AI messages, atomic full-history replacement, revision checks, and per-session write locks.
-
-It is not an AgentSpec capability. Hosts call it explicitly, and YoloP core does not depend on it.
+[`packages/yolop-workspace-session`](packages/yolop-workspace-session) provides `WorkspaceRuntimeStore`. It applies workspace path policy to the shared SQLite runtime implementation and stores the database at `<workspace>/.yolop/runtime.db`. It is host persistence, not an AgentSpec capability.
 
 ## Agent configuration and code
 
-AgentSpec contains declarative agent data:
-
-- instructions and prompts;
-- model configuration;
-- capability names and arguments;
-- selected bundled skills;
-- immutable inline custom skill snapshots.
+AgentSpec contains declarative agent data: instructions, prompts, model configuration, capability names and arguments, bundled skills, and immutable inline custom skills.
 
 Capability implementations and tools are installed Python code. YoloP resolves custom capability names through the `yolop.capabilities` entry-point group and imports only selected providers.
 
-The coding and research examples in [`pydantic-ai-harness`](https://github.com/pydantic/pydantic-ai-harness/tree/v0.21.0/examples) are composition references. YoloP uses harness code through optional capability plugins, but agents remain external AgentSpec data. It does not copy the Python `build_agent()` factory pattern.
-
-Changing prompts, inline skills, or capability arguments creates a new AgentSpec and needs no code release. Changing capability code or bundled skill files requires a package deployment. Bundled skills are available but inactive until AgentSpec enables them.
+Changing prompts, inline skills, or capability arguments creates a new AgentSpec and needs no code release. Existing sessions keep their immutable AgentSpec digest and model pin. A host must create a new session or implement an explicit upgrade operation to change either pin.

@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "yolop-sqlite-session"
 version = "0.1.0"
-description = "SQLite session persistence for YoloP hosts"
+description = "SQLite runtime persistence for YoloP hosts"
 requires-python = ">=3.12"
 dependencies = [
     "filelock>=3.20.0",

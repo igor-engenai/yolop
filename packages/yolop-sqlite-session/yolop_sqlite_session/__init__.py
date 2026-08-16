@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
-from collections.abc import AsyncIterator, Sequence
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Callable, Iterator, Sequence
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
@@ -32,7 +32,6 @@ from yolop_session import (
     SessionFormatError,
     SessionLockTimeoutError,
     SessionNotFoundError,
-    SessionSnapshot,
     StoredRunEvent,
     new_session_id,
     validate_namespace,
@@ -41,13 +40,6 @@ from yolop_session import (
 
 _EMPTY_MESSAGES = b"[]"
 _USAGE_ADAPTER = TypeAdapter(RunUsage)
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS sessions (
-    id TEXT PRIMARY KEY,
-    revision TEXT NOT NULL,
-    messages BLOB NOT NULL
-)
-"""
 _RUNTIME_SCHEMA_VERSION = 1
 _RUNTIME_METADATA_SCHEMA = """
 CREATE TABLE runtime_metadata (
@@ -104,127 +96,6 @@ session_revision, error_code, error_detail
 """
 
 
-class SQLiteSessionStore:
-    """Store agent sessions in a host-provided SQLite database."""
-
-    def __init__(self, database: str | Path) -> None:
-        self._database = Path(database).expanduser().resolve()
-        self._database.parent.mkdir(parents=True, exist_ok=True)
-        with self._connect() as connection:
-            connection.execute("PRAGMA journal_mode=WAL")
-            connection.execute(_SCHEMA)
-
-    async def create(self) -> SessionSnapshot:
-        """Create and return an empty session with a generated ID."""
-        return await asyncio.to_thread(self._create)
-
-    async def list_sessions(self) -> list[str]:
-        """List session IDs in stable order."""
-        return await asyncio.to_thread(self._list_sessions)
-
-    async def load(self, session_id: str) -> SessionSnapshot:
-        """Load one session and its content revision."""
-        return await asyncio.to_thread(self._load, session_id)
-
-    async def delete(self, session_id: str, *, expected_revision: str) -> None:
-        """Delete a session if its revision is current."""
-        await asyncio.to_thread(self._delete, session_id, expected_revision)
-
-    async def replace(
-        self,
-        session_id: str,
-        *,
-        expected_revision: str,
-        messages: Sequence[ModelMessage],
-    ) -> SessionSnapshot:
-        """Atomically replace a session's complete message history."""
-        return await asyncio.to_thread(
-            self._replace,
-            session_id,
-            expected_revision,
-            messages,
-        )
-
-    def _create(self) -> SessionSnapshot:
-        while True:
-            session_id = new_session_id()
-            revision = _revision(_EMPTY_MESSAGES)
-            try:
-                with self._connect() as connection:
-                    connection.execute(
-                        "INSERT INTO sessions (id, revision, messages) VALUES (?, ?, ?)",
-                        (session_id, revision, _EMPTY_MESSAGES),
-                    )
-            except sqlite3.IntegrityError:
-                continue
-            return SessionSnapshot(id=session_id, messages=[], revision=revision)
-
-    def _list_sessions(self) -> list[str]:
-        with self._connect() as connection:
-            rows = connection.execute("SELECT id FROM sessions ORDER BY id").fetchall()
-        return [row[0] for row in rows]
-
-    def _load(self, session_id: str) -> SessionSnapshot:
-        validated_id = validate_session_id(session_id)
-        with self._connect() as connection:
-            row = connection.execute(
-                "SELECT revision, messages FROM sessions WHERE id = ?",
-                (validated_id,),
-            ).fetchone()
-        if row is None:
-            raise SessionNotFoundError(f"Session {session_id!r} does not exist")
-        revision, content = row
-        try:
-            messages = ModelMessagesTypeAdapter.validate_json(content)
-        except (ValueError, ValidationError) as error:
-            raise SessionFormatError(f"Session {session_id!r} has invalid messages") from error
-        return SessionSnapshot(id=session_id, messages=messages, revision=revision)
-
-    def _delete(self, session_id: str, expected_revision: str) -> None:
-        validated_id = validate_session_id(session_id)
-        with self._connect() as connection:
-            connection.execute("BEGIN IMMEDIATE")
-            row = connection.execute(
-                "SELECT revision FROM sessions WHERE id = ?",
-                (validated_id,),
-            ).fetchone()
-            if row is None:
-                raise SessionNotFoundError(f"Session {session_id!r} does not exist")
-            if row[0] != expected_revision:
-                raise SessionConflictError(f"Session {session_id!r} has changed")
-            connection.execute("DELETE FROM sessions WHERE id = ?", (validated_id,))
-
-    def _replace(
-        self,
-        session_id: str,
-        expected_revision: str,
-        messages: Sequence[ModelMessage],
-    ) -> SessionSnapshot:
-        validated_id = validate_session_id(session_id)
-        content = ModelMessagesTypeAdapter.dump_json(list(messages))
-        revision = _revision(content)
-        with self._connect() as connection:
-            connection.execute("BEGIN IMMEDIATE")
-            row = connection.execute(
-                "SELECT revision FROM sessions WHERE id = ?",
-                (validated_id,),
-            ).fetchone()
-            if row is None:
-                raise SessionNotFoundError(f"Session {session_id!r} does not exist")
-            if row[0] != expected_revision:
-                raise SessionConflictError(f"Session {session_id!r} has changed")
-            connection.execute(
-                "UPDATE sessions SET revision = ?, messages = ? WHERE id = ?",
-                (revision, content, validated_id),
-            )
-        return SessionSnapshot(id=session_id, messages=list(messages), revision=revision)
-
-    def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self._database, timeout=5)
-        connection.execute("PRAGMA busy_timeout=5000")
-        return connection
-
-
 class SQLiteRuntimeStore:
     """Store namespaced YoloP runtime state in SQLite."""
 
@@ -240,18 +111,28 @@ class SQLiteRuntimeStore:
                     "SELECT name FROM sqlite_master WHERE type = 'table'"
                 ).fetchall()
             }
-            if tables and "runtime_metadata" not in tables:
-                raise RuntimeStoreSchemaError(
-                    "Database contains an unsupported pre-runtime schema"
-                )
+            required_tables = {
+                "runtime_metadata",
+                "runtime_sessions",
+                "runtime_runs",
+                "runtime_run_events",
+            }
             if not tables:
-                connection.execute(_RUNTIME_METADATA_SCHEMA)
-                connection.execute(
-                    "INSERT INTO runtime_metadata (singleton, schema_version) VALUES (1, ?)",
-                    (_RUNTIME_SCHEMA_VERSION,),
+                connection.executescript(
+                    f"""
+                    BEGIN IMMEDIATE;
+                    {_RUNTIME_METADATA_SCHEMA};
+                    INSERT INTO runtime_metadata (singleton, schema_version)
+                    VALUES (1, {_RUNTIME_SCHEMA_VERSION});
+                    {_RUNTIME_SCHEMA};
+                    COMMIT;
+                    """
                 )
-                connection.executescript(_RUNTIME_SCHEMA)
             else:
+                if not required_tables.issubset(tables):
+                    raise RuntimeStoreSchemaError(
+                        "Database contains an incomplete or unsupported runtime schema"
+                    )
                 row = connection.execute(
                     "SELECT schema_version FROM runtime_metadata WHERE singleton = 1"
                 ).fetchone()
@@ -264,17 +145,17 @@ class SQLiteRuntimeStore:
         *,
         pin: ExecutionPin,
     ) -> RuntimeSessionSnapshot:
-        return await asyncio.to_thread(self._create_session, namespace, pin)
+        return await _to_thread(self._create_session, namespace, pin)
 
     async def list_sessions(self, namespace: str) -> list[str]:
-        return await asyncio.to_thread(self._list_runtime_sessions, namespace)
+        return await _to_thread(self._list_runtime_sessions, namespace)
 
     async def load_session(
         self,
         namespace: str,
         session_id: str,
     ) -> RuntimeSessionSnapshot:
-        return await asyncio.to_thread(self._load_runtime_session, namespace, session_id)
+        return await _to_thread(self._load_runtime_session, namespace, session_id)
 
     async def reserve_run(
         self,
@@ -285,7 +166,7 @@ class SQLiteRuntimeStore:
         prompt: str,
         max_pending: int | None = None,
     ) -> RunReservation:
-        return await asyncio.to_thread(
+        return await _to_thread(
             self._reserve_run,
             namespace,
             session_id,
@@ -295,7 +176,7 @@ class SQLiteRuntimeStore:
         )
 
     async def load_run(self, namespace: str, run_id: str) -> RuntimeRunSnapshot:
-        return await asyncio.to_thread(self._load_run, namespace, run_id)
+        return await _to_thread(self._load_run, namespace, run_id)
 
     async def claim_run(
         self,
@@ -305,7 +186,7 @@ class SQLiteRuntimeStore:
         owner_id: str,
         lease_seconds: float,
     ) -> RuntimeRunSnapshot:
-        return await asyncio.to_thread(
+        return await _to_thread(
             self._claim_run,
             namespace,
             run_id,
@@ -321,7 +202,7 @@ class SQLiteRuntimeStore:
         owner_id: str,
         lease_seconds: float,
     ) -> RuntimeRunSnapshot:
-        return await asyncio.to_thread(
+        return await _to_thread(
             self._renew_run_lease,
             namespace,
             run_id,
@@ -338,7 +219,7 @@ class SQLiteRuntimeStore:
         event: str,
         data: str,
     ) -> StoredRunEvent:
-        return await asyncio.to_thread(
+        return await _to_thread(
             self._append_run_event,
             namespace,
             run_id,
@@ -354,7 +235,7 @@ class SQLiteRuntimeStore:
         *,
         after: int = 0,
     ) -> list[StoredRunEvent]:
-        return await asyncio.to_thread(self._list_run_events, namespace, run_id, after)
+        return await _to_thread(self._list_run_events, namespace, run_id, after)
 
     async def complete_run(
         self,
@@ -367,7 +248,7 @@ class SQLiteRuntimeStore:
         output: Any,
         usage: RunUsage,
     ) -> RunCompletion:
-        return await asyncio.to_thread(
+        return await _to_thread(
             self._complete_run,
             namespace,
             run_id,
@@ -387,7 +268,7 @@ class SQLiteRuntimeStore:
         error_code: str,
         error_detail: str,
     ) -> RuntimeRunSnapshot:
-        return await asyncio.to_thread(
+        return await _to_thread(
             self._fail_run,
             namespace,
             run_id,
@@ -397,10 +278,10 @@ class SQLiteRuntimeStore:
         )
 
     async def interrupt_owned_runs(self, owner_id: str) -> int:
-        return await asyncio.to_thread(self._interrupt_owned_runs, owner_id)
+        return await _to_thread(self._interrupt_owned_runs, owner_id)
 
     async def interrupt_expired_runs(self) -> int:
-        return await asyncio.to_thread(self._interrupt_expired_runs)
+        return await _to_thread(self._interrupt_expired_runs)
 
     async def delete_session(
         self,
@@ -409,7 +290,7 @@ class SQLiteRuntimeStore:
         *,
         expected_revision: str,
     ) -> None:
-        await asyncio.to_thread(
+        await _to_thread(
             self._delete_runtime_session,
             namespace,
             session_id,
@@ -450,7 +331,7 @@ class SQLiteRuntimeStore:
         expected_revision: str,
         messages: Sequence[ModelMessage],
     ) -> RuntimeSessionSnapshot:
-        return await asyncio.to_thread(
+        return await _to_thread(
             self._replace_runtime_session,
             namespace,
             session_id,
@@ -1022,11 +903,29 @@ class SQLiteRuntimeStore:
             revision=revision,
         )
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
         connection = sqlite3.connect(self._database, timeout=5)
-        connection.execute("PRAGMA busy_timeout=5000")
-        connection.execute("PRAGMA foreign_keys=ON")
-        return connection
+        try:
+            connection.execute("PRAGMA busy_timeout=5000")
+            connection.execute("PRAGMA foreign_keys=ON")
+            with connection:
+                yield connection
+        finally:
+            connection.close()
+
+
+async def _to_thread[ResultT](
+    function: Callable[..., ResultT],
+    *args: Any,
+) -> ResultT:
+    """Run blocking store work to completion before propagating cancellation."""
+    worker = asyncio.create_task(asyncio.to_thread(function, *args))
+    try:
+        return await asyncio.shield(worker)
+    except asyncio.CancelledError:
+        await asyncio.gather(worker, return_exceptions=True)
+        raise
 
 
 def _select_runtime_run(
@@ -1105,4 +1004,4 @@ def _revision(content: bytes) -> str:
     return sha256(content).hexdigest()
 
 
-__all__ = ["SQLiteRuntimeStore", "SQLiteSessionStore"]
+__all__ = ["SQLiteRuntimeStore"]
