@@ -1,7 +1,10 @@
+import asyncio
+
 from rich.text import Text
 from textual import events
 from textual.containers import VerticalScroll
-from textual.widgets import OptionList, Static, TextArea
+from textual.widgets import Input, OptionList, Static, TextArea
+from yolop_tui.selection import SelectionOption
 from yolop_tui.textual_app import TextualTerminal
 
 
@@ -114,6 +117,36 @@ async def test_textual_editor_completes_commands_and_project_files(tmp_path) -> 
         await pilot.press("tab")
         await pilot.pause()
         assert editor.text == "@src/answer.py"
+
+
+async def test_textual_session_picker_fuzzy_selects_and_cancels() -> None:
+    terminal = TextualTerminal(on_submit=lambda _text: None)
+    options = [
+        SelectionOption("first", "first-id  Earlier conversation"),
+        SelectionOption("target", "target-id  Target conversation"),
+    ]
+
+    async with terminal.app.run_test(size=(80, 24)) as pilot:
+        selected = asyncio.create_task(terminal.choose(options))
+        await pilot.pause()
+        filter_input = terminal.app.screen.query_one("#session-filter", Input)
+        option_list = terminal.app.screen.query_one("#session-options", OptionList)
+        await pilot.press("t", "g", "t")
+        await pilot.pause()
+        assert filter_input.value == "tgt"
+        assert option_list.option_count == 1
+        await pilot.press("enter")
+        assert await asyncio.wait_for(selected, timeout=1) == "target"
+
+        cancelled = asyncio.create_task(terminal.choose(options))
+        await pilot.pause()
+        await pilot.press("escape")
+        assert await asyncio.wait_for(cancelled, timeout=1) is None
+
+        clicked = asyncio.create_task(terminal.choose(options))
+        await pilot.pause()
+        assert await pilot.click("#session-options", offset=(2, 1))
+        assert await asyncio.wait_for(clicked, timeout=1) == "first"
 
 
 async def test_textual_ctrl_c_and_ctrl_d_exit_when_idle_and_empty() -> None:

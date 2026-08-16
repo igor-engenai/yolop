@@ -31,7 +31,8 @@ from yolop import Yolop
 from .completion import TuiCompleter
 from .files import FileReferenceError, prepare_prompt
 from .rendering import Transcript
-from .terminal import InlineTerminal, SelectionOption
+from .selection import SelectionOption
+from .terminal import InlineTerminal
 
 _LOGGER = logging.getLogger(__name__)
 _SESSION_LOCK_TIMEOUT = 30.0

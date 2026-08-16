@@ -7,10 +7,12 @@ from rich.text import Text
 from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import VerticalScroll
-from textual.widgets import OptionList, Static, TextArea
+from textual.containers import Vertical, VerticalScroll
+from textual.screen import ModalScreen
+from textual.widgets import Input, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
+from .selection import SelectionOption
 from .suggestions import PromptCompleter, PromptCompletion
 
 
@@ -135,6 +137,91 @@ class _PromptEditor(TextArea):
         self.move_cursor((len(lines) - 1, len(lines[-1])))
 
 
+class _SessionPicker(ModalScreen[str | None]):
+    BINDINGS = [
+        Binding("escape", "cancel", priority=True),
+        Binding("enter", "select", priority=True),
+        Binding("up", "cursor_up", priority=True),
+        Binding("down", "cursor_down", priority=True),
+    ]
+    CSS = """
+    _SessionPicker {
+        align: center middle;
+        background: $background 70%;
+    }
+
+    #session-picker {
+        width: 80%;
+        height: 60%;
+        min-height: 8;
+        border: round ansi_bright_black;
+        background: $surface;
+        padding: 1;
+    }
+
+    #session-filter {
+        width: 1fr;
+        height: 3;
+        border: round ansi_bright_black;
+    }
+
+    #session-options {
+        width: 1fr;
+        height: 1fr;
+    }
+    """
+
+    def __init__(self, options: list[SelectionOption]) -> None:
+        super().__init__()
+        self._options = tuple(options)
+        self._matches = self._options
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="session-picker"):
+            yield Input(placeholder="Filter sessions", id="session-filter")
+            yield OptionList(id="session-options")
+
+    def on_mount(self) -> None:
+        self.query_one("#session-filter", Input).focus()
+        self._refresh_options("")
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        self._refresh_options(event.value)
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        if event.option.id is not None:
+            self.dismiss(event.option.id)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def action_select(self) -> None:
+        options = self.query_one("#session-options", OptionList)
+        if options.option_count == 0:
+            return
+        index = options.highlighted or 0
+        option = options.get_option_at_index(index)
+        if option.id is not None:
+            self.dismiss(option.id)
+
+    def action_cursor_up(self) -> None:
+        self.query_one("#session-options", OptionList).action_cursor_up()
+
+    def action_cursor_down(self) -> None:
+        self.query_one("#session-options", OptionList).action_cursor_down()
+
+    def _refresh_options(self, query: str) -> None:
+        self._matches = tuple(
+            option
+            for option in self._options
+            if _fuzzy_match(query.casefold(), option.label.casefold())
+        )
+        options = self.query_one("#session-options", OptionList)
+        options.clear_options()
+        options.add_options(Option(option.label, id=option.value) for option in self._matches)
+        options.highlighted = 0 if self._matches else None
+
+
 class _YolopTextualApp(App[None]):
     ENABLE_COMMAND_PALETTE = False
     BINDINGS = [
@@ -249,7 +336,7 @@ class _YolopTextualApp(App[None]):
         options.styles.display = "block"
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
-        if event.option.id is not None:
+        if event.option_list.id == "completions" and event.option.id is not None:
             self._accept_completion(int(event.option.id))
 
     def _move_completion(self, direction: int) -> bool:
@@ -350,6 +437,16 @@ class TextualTerminal:
     async def wait_until_ready(self) -> None:
         await self._ready.wait()
 
+    async def choose(self, options: list[SelectionOption]) -> str | None:
+        future: asyncio.Future[str | None] = asyncio.get_running_loop().create_future()
+
+        def selected(value: str | None) -> None:
+            if not future.done():
+                future.set_result(value)
+
+        self.app.push_screen(_SessionPicker(options), callback=selected)
+        return await future
+
     def set_transcript(self, renderable: RenderableType) -> None:
         self.app.set_transcript(renderable)
 
@@ -362,3 +459,8 @@ class TextualTerminal:
 
     def stop(self) -> None:
         self.app.exit()
+
+
+def _fuzzy_match(query: str, value: str) -> bool:
+    characters = iter(value)
+    return all(any(candidate == expected for candidate in characters) for expected in query)

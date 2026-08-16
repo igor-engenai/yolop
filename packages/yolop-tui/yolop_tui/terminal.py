@@ -16,11 +16,7 @@ from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.mouse_events import MouseEvent, MouseEventType
 from prompt_toolkit.styles import Style
 
-
-@dataclass(frozen=True)
-class SelectionOption:
-    value: str
-    label: str
+from .selection import SelectionOption
 
 
 @dataclass
