@@ -24,6 +24,7 @@ dev = [
     "ruff>=0.16.3",
     "ty>=0.0.72",
     "yolop-duckdb",
+    "yolop-session",
     "yolop-workspace",
     "yolop-workspace-session",
 ]
@@ -33,12 +34,14 @@ package = true
 
 [tool.uv.sources]
 yolop-duckdb = { workspace = true }
+yolop-session = { workspace = true }
 yolop-workspace = { workspace = true }
 yolop-workspace-session = { workspace = true }
 
 [tool.uv.workspace]
 members = [
     "packages/yolop-duckdb",
+    "packages/yolop-session",
     "packages/yolop-workspace",
     "packages/yolop-workspace-session",
 ]
@@ -49,6 +52,7 @@ asyncio_mode = "auto"
 testpaths = [
     "tests",
     "packages/yolop-duckdb/tests",
+    "packages/yolop-session/tests",
     "packages/yolop-workspace/tests",
     "packages/yolop-workspace-session/tests",
 ]

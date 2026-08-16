@@ -6,6 +6,7 @@ requires-python = ">=3.12"
 members = [
     "yolop",
     "yolop-duckdb",
+    "yolop-session",
     "yolop-workspace",
     "yolop-workspace-session",
 ]
@@ -992,6 +993,7 @@ dev = [
     { name = "ruff" },
     { name = "ty" },
     { name = "yolop-duckdb" },
+    { name = "yolop-session" },
     { name = "yolop-workspace" },
     { name = "yolop-workspace-session" },
 ]
@@ -1010,6 +1012,7 @@ dev = [
     { name = "ruff", specifier = ">=0.16.3" },
     { name = "ty", specifier = ">=0.0.72" },
     { name = "yolop-duckdb", editable = "packages/yolop-duckdb" },
+    { name = "yolop-session", editable = "packages/yolop-session" },
     { name = "yolop-workspace", editable = "packages/yolop-workspace" },
     { name = "yolop-workspace-session", editable = "packages/yolop-workspace-session" },
 ]
@@ -1028,6 +1031,17 @@ requires-dist = [
     { name = "duckdb", specifier = ">=1.4.0,<2" },
     { name = "pydantic-ai-slim", specifier = ">=2.31.0" },
 ]
+
+[[package]]
+name = "yolop-session"
+version = "0.1.0"
+source = { editable = "packages/yolop-session" }
+dependencies = [
+    { name = "pydantic-ai-slim" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "pydantic-ai-slim", specifier = ">=2.31.0" }]
 
 [[package]]
 name = "yolop-workspace"
@@ -1051,10 +1065,12 @@ source = { editable = "packages/yolop-workspace-session" }
 dependencies = [
     { name = "filelock" },
     { name = "pydantic-ai-slim" },
+    { name = "yolop-session" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "filelock", specifier = ">=3.20.0" },
     { name = "pydantic-ai-slim", specifier = ">=2.31.0" },
+    { name = "yolop-session", editable = "packages/yolop-session" },
 ]

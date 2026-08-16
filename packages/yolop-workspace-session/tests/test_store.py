@@ -4,14 +4,14 @@ from uuid import UUID, uuid4
 
 from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
 from pytest import raises
-from yolop_workspace_session import (
+from yolop_session import (
     InvalidSessionIdError,
     SessionConflictError,
     SessionFormatError,
     SessionNotFoundError,
     SessionSnapshot,
-    WorkspaceSessionStore,
 )
+from yolop_workspace_session import WorkspaceSessionStore
 
 
 async def test_create_returns_an_empty_generated_session(tmp_path) -> None:

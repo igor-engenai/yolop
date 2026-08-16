@@ -3,40 +3,22 @@ from __future__ import annotations
 import asyncio
 import os
 from collections.abc import Sequence
-from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 from filelock import FileLock
 from pydantic import ValidationError
 from pydantic_ai.messages import ModelMessage, ModelMessagesTypeAdapter
 from pydantic_core import from_json, to_json
-
-
-class InvalidSessionIdError(ValueError):
-    """A session ID is not a generated UUID4."""
-
-
-class SessionConflictError(RuntimeError):
-    """The stored session does not match the expected revision."""
-
-
-class SessionFormatError(ValueError):
-    """A stored session does not contain valid ModelMessage JSONL."""
-
-
-class SessionNotFoundError(LookupError):
-    """A generated session ID does not exist in this workspace."""
-
-
-@dataclass(frozen=True)
-class SessionSnapshot:
-    """A session history at one content revision."""
-
-    id: str
-    messages: list[ModelMessage]
-    revision: str
+from yolop_session import (
+    SessionConflictError,
+    SessionFormatError,
+    SessionNotFoundError,
+    SessionSnapshot,
+    new_session_id,
+    validate_session_id,
+)
 
 
 class WorkspaceSessionStore:
@@ -74,7 +56,7 @@ class WorkspaceSessionStore:
     def _create(self) -> SessionSnapshot:
         self._directory.mkdir(parents=True, exist_ok=True)
         while True:
-            session_id = str(uuid4())
+            session_id = new_session_id()
             try:
                 self._path(session_id).touch(exist_ok=False)
             except FileExistsError:
@@ -153,26 +135,11 @@ class WorkspaceSessionStore:
             raise SessionNotFoundError(f"Session {session_id!r} does not exist") from error
 
     def _path(self, session_id: str) -> Path:
-        try:
-            parsed = UUID(session_id)
-        except (AttributeError, TypeError, ValueError) as error:
-            raise InvalidSessionIdError(
-                f"Session ID {session_id!r} is not a generated UUID4"
-            ) from error
-        if parsed.version != 4 or str(parsed) != session_id:
-            raise InvalidSessionIdError(f"Session ID {session_id!r} is not a generated UUID4")
-        return self._directory / f"{session_id}.jsonl"
+        return self._directory / f"{validate_session_id(session_id)}.jsonl"
 
 
 def _revision(content: bytes) -> str:
     return sha256(content).hexdigest()
 
 
-__all__ = [
-    "InvalidSessionIdError",
-    "SessionConflictError",
-    "SessionFormatError",
-    "SessionNotFoundError",
-    "SessionSnapshot",
-    "WorkspaceSessionStore",
-]
+__all__ = ["WorkspaceSessionStore"]
