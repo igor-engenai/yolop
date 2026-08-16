@@ -24,9 +24,16 @@ async def test_duckdb_agentspec_runs_with_a_persistent_session(tmp_path: Path) -
     spec = AgentSpec.from_file(SPEC_PATH)
     assert spec.model == "openai:gpt-5.6-luna"
 
-    connection = duckdb.connect(":memory:", config={"enable_external_access": "false"})
-    connection.execute("create table sales(amount integer)")
-    connection.execute("insert into sales values (10), (20)")
+    database = tmp_path / "analytics.duckdb"
+    writer = duckdb.connect(str(database))
+    writer.execute("create table sales(amount integer)")
+    writer.execute("insert into sales values (10), (20)")
+    writer.close()
+    connection = duckdb.connect(
+        str(database),
+        read_only=True,
+        config={"enable_external_access": "false"},
+    )
     store = WorkspaceRuntimeStore(tmp_path)
     assert isinstance(spec.model, str)
     session = await store.create_session(

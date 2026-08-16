@@ -36,6 +36,9 @@ class DuckDB(AbstractCapability[Any]):
             raise UserError(
                 "DuckDB capability requires a connection with enable_external_access=false"
             )
+        access_mode = await asyncio.to_thread(_access_mode, connection)
+        if access_mode != "read_only":
+            raise UserError("DuckDB capability requires a connection with access_mode=read_only")
         return _DuckDBRun(connection=connection, max_rows=self.max_rows)
 
 
@@ -81,6 +84,15 @@ def _external_access_enabled(connection: duckdb.DuckDBPyConnection) -> bool:
     try:
         row = cursor.execute("select current_setting('enable_external_access')").fetchone()
         return bool(row and row[0])
+    finally:
+        cursor.close()
+
+
+def _access_mode(connection: duckdb.DuckDBPyConnection) -> str | None:
+    cursor = connection.cursor()
+    try:
+        row = cursor.execute("select current_setting('access_mode')").fetchone()
+        return str(row[0]) if row else None
     finally:
         cursor.close()
 
