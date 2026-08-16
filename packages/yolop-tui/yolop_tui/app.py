@@ -17,7 +17,6 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models import KnownModelName, Model
 from pydantic_ai.run import EnqueueContent
-from rich.console import RenderableType
 from yolop_session import (
     ExecutionPin,
     RuntimeSessionSnapshot,
@@ -37,16 +36,6 @@ from .textual_app import TextualTerminal
 _LOGGER = logging.getLogger(__name__)
 _SESSION_LOCK_TIMEOUT = 30.0
 _TERMINAL_FACTORY = TextualTerminal
-
-
-def _render_rich_transcript(
-    transcript: Transcript,
-    _terminal: TextualTerminal,
-) -> RenderableType:
-    return transcript.renderable()
-
-
-_TRANSCRIPT_RENDERER = _render_rich_transcript
 _HELP_TEXT = (
     "Commands: /new  /resume  /help  /quit\n"
     "Scroll: PageUp/PageDown or mouse wheel · End: newest output"
@@ -80,7 +69,7 @@ async def run_tui[DepsT](
     terminal: TextualTerminal
 
     def render_transcript() -> None:
-        terminal.set_transcript(_TRANSCRIPT_RENDERER(transcript, terminal))
+        terminal.set_transcript(transcript.renderable())
 
     def refresh_status() -> None:
         input_tokens, output_tokens = _session_usage(session.messages)

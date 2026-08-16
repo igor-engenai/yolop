@@ -1,10 +1,8 @@
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass
-from io import StringIO
 from typing import Any
 
-from prompt_toolkit.formatted_text import ANSI
 from pydantic_ai import AgentStreamEvent, FunctionToolCallEvent, FunctionToolResultEvent
 from pydantic_ai.messages import (
     ModelMessage,
@@ -23,7 +21,7 @@ from pydantic_ai.messages import (
     UserContent,
     UserPromptPart,
 )
-from rich.console import Console, Group, RenderableType
+from rich.console import Group, RenderableType
 from rich.markdown import Markdown
 from rich.text import Text
 
@@ -145,36 +143,6 @@ class Transcript:
                 renderables.append(Text(f"Error: {entry.text}", style="red", overflow="fold"))
         return Group(*renderables)
 
-    def render(self, width: int) -> ANSI:
-        stream = StringIO()
-        console = Console(
-            file=stream,
-            force_terminal=True,
-            color_system="standard",
-            width=max(1, width),
-            highlight=False,
-            legacy_windows=False,
-        )
-        first = True
-        for entry in self._visible_entries():
-            if not first:
-                console.print()
-            first = False
-            if isinstance(entry, _ToolEntry):
-                self._render_tool(console, entry)
-            elif entry.role == "user":
-                console.print(Text(f"› {entry.text}", style="cyan"), overflow="fold")
-            elif entry.role == "assistant":
-                console.print(Markdown(entry.text))
-            elif entry.role == "thinking":
-                console.print(Text("thinking", style="dim"))
-                console.print(Text(entry.text, style="dim"), overflow="fold")
-            elif entry.role == "notice":
-                console.print(Text(entry.text, style="dim"), overflow="fold")
-            else:
-                console.print(Text(f"Error: {entry.text}", style="red"), overflow="fold")
-        return ANSI(stream.getvalue().rstrip("\n"))
-
     def _visible_entries(self) -> list[_TextEntry | _ToolEntry]:
         return [
             entry
@@ -234,9 +202,6 @@ class Transcript:
                 Text(f"    {_bounded_detail(tool.result)}", style="dim", overflow="fold")
             )
         return Group(*renderables)
-
-    def _render_tool(self, console: Console, tool: _ToolEntry) -> None:
-        console.print(self._tool_renderable(tool))
 
 
 def _display_user_content(content: str | Sequence[UserContent]) -> str:

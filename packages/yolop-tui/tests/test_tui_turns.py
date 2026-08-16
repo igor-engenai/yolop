@@ -1,16 +1,15 @@
 import asyncio
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from importlib import metadata
+from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import yolop_tui.app as tui_app
-from prompt_toolkit.application import create_app_session
-from prompt_toolkit.data_structures import Size
-from prompt_toolkit.input.defaults import create_pipe_input
-from prompt_toolkit.output import DummyOutput
 from pydantic_ai import AgentSpec, RunContext, Tool
 from pydantic_ai.capabilities import AbstractCapability
 from pydantic_ai.messages import (
@@ -31,23 +30,195 @@ from pydantic_ai.models.function import (
 )
 from pydantic_ai.toolsets.function import FunctionToolset
 from pytest import MonkeyPatch, fixture, mark, raises
+from rich.console import Console, RenderableType
 from yolop_session import ExecutionPin, SessionPinMismatchError
 from yolop_sqlite_session import SQLiteRuntimeStore
 from yolop_tui import run_tui
-from yolop_tui.terminal import InlineTerminal
+from yolop_tui.selection import SelectionOption
+
+
+class CapturingOutput:
+    def __init__(self, *, rows: int = 24) -> None:
+        self.rows = rows
+        self.writes: list[str] = []
+
+    def write(self, data: str) -> None:
+        self.writes.append(data)
+
+    @property
+    def text(self) -> str:
+        return "".join(self.writes)
+
+
+class _ScriptedInput:
+    def __init__(self) -> None:
+        self.output: CapturingOutput | None = None
+        self.terminal: _ScriptedTerminal | None = None
+
+    def bind(self, terminal: "_ScriptedTerminal") -> None:
+        self.terminal = terminal
+
+    def send_text(self, text: str) -> None:
+        assert self.terminal is not None
+        for character in text:
+            self.terminal.feed_text(character)
+
+    def send_bytes(self, data: bytes) -> None:
+        assert self.terminal is not None
+        for value in data:
+            if value == 3:
+                self.terminal.interrupt()
+            elif value == 4:
+                self.terminal.eof()
+            elif value == 15:
+                self.terminal.toggle_tools()
+            elif value == 20:
+                self.terminal.toggle_thinking()
+            elif value == 27:
+                self.terminal.cancel()
+
+
+class _ScriptedTerminal:
+    def __init__(
+        self,
+        pipe: _ScriptedInput,
+        *,
+        on_submit: Callable[[str], None],
+        on_cancel: Callable[[], bool | None],
+        on_toggle_tools: Callable[[], None],
+        on_toggle_thinking: Callable[[], None],
+        **_kwargs: Any,
+    ) -> None:
+        assert pipe.output is not None
+        self._pipe = pipe
+        self._output = pipe.output
+        self._on_submit = on_submit
+        self._on_cancel = on_cancel
+        self._on_toggle_tools = on_toggle_tools
+        self._on_toggle_thinking = on_toggle_thinking
+        self._buffer = ""
+        self._stopped = asyncio.Event()
+        self._ready = asyncio.Event()
+        self._selection: tuple[SelectionOption, ...] | None = None
+        self._selection_future: asyncio.Future[str | None] | None = None
+        pipe.bind(self)
+
+    async def run(self) -> None:
+        self._output.write("╭─ prompt")
+        self._ready.set()
+        await self._stopped.wait()
+
+    async def wait_until_ready(self) -> None:
+        await self._ready.wait()
+
+    async def choose(self, options: list[SelectionOption]) -> str | None:
+        self._selection = tuple(options)
+        self._selection_future = asyncio.get_running_loop().create_future()
+        self._buffer = ""
+        self._output.write("\n".join(option.label for option in options))
+        try:
+            return await self._selection_future
+        finally:
+            self._selection = None
+            self._selection_future = None
+            self._buffer = ""
+
+    def set_transcript(self, renderable: RenderableType) -> None:
+        stream = StringIO()
+        Console(file=stream, width=80, color_system=None).print(renderable)
+        self._output.write(stream.getvalue())
+
+    def set_status(self, text: str) -> None:
+        self._output.write(text)
+
+    def restore_editor_text(self, text: str) -> None:
+        self._buffer = f"{self._buffer}\n\n{text}" if self._buffer else text
+
+    def feed_text(self, character: str) -> None:
+        if character == "\r":
+            if self._selection is not None:
+                matches = [
+                    option
+                    for option in self._selection
+                    if _fuzzy_match(self._buffer.casefold(), option.label.casefold())
+                ]
+                if matches and self._selection_future is not None:
+                    self._selection_future.set_result(matches[0].value)
+                return
+            text = self._buffer
+            self._buffer = ""
+            if text.strip():
+                if text.strip() == "/quit":
+                    asyncio.get_running_loop().call_later(0.01, self._on_submit, text)
+                else:
+                    self._on_submit(text)
+        elif character == "\n":
+            self._buffer += "\n"
+        else:
+            self._buffer += character
+
+    def interrupt(self) -> None:
+        if self._buffer:
+            self._buffer = ""
+        elif self._on_cancel() is not True:
+            self.stop()
+
+    def eof(self) -> None:
+        if not self._buffer:
+            self.stop()
+
+    def cancel(self) -> None:
+        if self._selection_future is not None:
+            self._selection_future.set_result(None)
+        else:
+            self._on_cancel()
+
+    def toggle_tools(self) -> None:
+        self._on_toggle_tools()
+
+    def toggle_thinking(self) -> None:
+        self._on_toggle_thinking()
+
+    def stop(self) -> None:
+        self._stopped.set()
+
+
+_CURRENT_PIPE: _ScriptedInput | None = None
+
+
+@contextmanager
+def create_pipe_input() -> Iterator[_ScriptedInput]:
+    global _CURRENT_PIPE
+    pipe = _ScriptedInput()
+    _CURRENT_PIPE = pipe
+    try:
+        yield pipe
+    finally:
+        _CURRENT_PIPE = None
+
+
+@contextmanager
+def create_app_session(
+    *,
+    input: _ScriptedInput,
+    output: CapturingOutput,
+) -> Iterator[None]:
+    input.output = output
+    yield
 
 
 @fixture(autouse=True)
-def use_legacy_terminal_during_textual_migration(monkeypatch: MonkeyPatch) -> None:
-    def terminal_factory(**kwargs):
-        kwargs.pop("cwd")
-        return InlineTerminal(**kwargs)
-
-    def transcript_renderer(transcript, terminal):
-        return transcript.render(terminal.width)
+def use_scripted_terminal(monkeypatch: MonkeyPatch) -> None:
+    def terminal_factory(**kwargs: Any) -> _ScriptedTerminal:
+        assert _CURRENT_PIPE is not None
+        return _ScriptedTerminal(_CURRENT_PIPE, **kwargs)
 
     monkeypatch.setattr(tui_app, "_TERMINAL_FACTORY", terminal_factory)
-    monkeypatch.setattr(tui_app, "_TRANSCRIPT_RENDERER", transcript_renderer)
+
+
+def _fuzzy_match(query: str, value: str) -> bool:
+    characters = iter(value)
+    return all(any(candidate == expected for candidate in characters) for expected in query)
 
 
 @dataclass
@@ -77,25 +248,6 @@ class WaitingTool(AbstractCapability[ToolDeps]):
         finally:
             context.deps.stopped.set()
         return "finished"
-
-
-class CapturingOutput(DummyOutput):
-    def __init__(self, *, rows: int = 24) -> None:
-        self.rows = rows
-        self.writes: list[str] = []
-
-    def write(self, data: str) -> None:
-        self.writes.append(data)
-
-    def write_raw(self, data: str) -> None:
-        self.writes.append(data)
-
-    def get_size(self) -> Size:
-        return Size(rows=self.rows, columns=80)
-
-    @property
-    def text(self) -> str:
-        return "".join(self.writes)
 
 
 async def _wait_for_output(output: CapturingOutput, text: str) -> None:

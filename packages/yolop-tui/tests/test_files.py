@@ -2,10 +2,9 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from prompt_toolkit.completion import CompleteEvent
-from prompt_toolkit.document import Document
 from pydantic_ai.messages import TextContent
-from yolop_tui.files import FileReferenceCompleter, FileReferenceError, prepare_prompt
+from yolop_tui.files import FileReferenceError, prepare_prompt
+from yolop_tui.suggestions import PromptCompleter
 
 
 def test_file_reference_adds_project_text_to_native_prompt(tmp_path: Path) -> None:
@@ -49,15 +48,11 @@ def test_file_reference_completion_fuzzy_matches_project_paths(tmp_path: Path) -
     source = tmp_path / "src" / "answer.py"
     source.parent.mkdir()
     source.write_text("ANSWER = 42\n")
-    completer = FileReferenceCompleter(tmp_path)
+    completer = PromptCompleter(tmp_path)
 
-    completions = list(
-        completer.get_completions(
-            Document("Explain @sra"), CompleteEvent(completion_requested=True)
-        )
-    )
+    completions = completer.complete("Explain @sra")
 
-    assert [completion.text for completion in completions] == ["@src/answer.py"]
+    assert [completion.value for completion in completions] == ["@src/answer.py"]
 
 
 def test_quoted_file_reference_supports_spaces(tmp_path: Path) -> None:
@@ -133,11 +128,9 @@ def test_file_completion_uses_git_ignored_file_policy(tmp_path: Path) -> None:
     (tmp_path / ".gitignore").write_text("ignored.txt\n")
     (tmp_path / "visible.txt").write_text("visible")
     (tmp_path / "ignored.txt").write_text("ignored")
-    completer = FileReferenceCompleter(tmp_path)
+    completer = PromptCompleter(tmp_path)
 
-    completions = list(
-        completer.get_completions(Document("@"), CompleteEvent(completion_requested=True))
-    )
+    completions = completer.complete("@")
 
-    assert "@visible.txt" in [completion.text for completion in completions]
-    assert "@ignored.txt" not in [completion.text for completion in completions]
+    assert "@visible.txt" in [completion.value for completion in completions]
+    assert "@ignored.txt" not in [completion.value for completion in completions]

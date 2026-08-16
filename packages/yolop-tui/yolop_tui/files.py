@@ -2,11 +2,8 @@ import json
 import os
 import re
 import subprocess
-from collections.abc import Iterable
 from pathlib import Path
 
-from prompt_toolkit.completion import CompleteEvent, Completer, Completion
-from prompt_toolkit.document import Document
 from pydantic_ai.messages import TextContent, UserContent
 
 _MAX_FILE_BYTES = 256 * 1024
@@ -16,30 +13,6 @@ _REFERENCE_START = re.compile(r"(?<!\S)@")
 
 class FileReferenceError(ValueError):
     """A user-selected project file cannot be attached safely."""
-
-
-class FileReferenceCompleter(Completer):
-    """Fuzzy-complete project files after an `@` marker."""
-
-    def __init__(self, cwd: Path) -> None:
-        self._files = _project_files(cwd.expanduser().resolve())
-
-    def get_completions(
-        self,
-        document: Document,
-        complete_event: CompleteEvent,
-    ) -> Iterable[Completion]:
-        match = re.search(r'(?<!\S)(@(?:"[^"]*|[^\s]*))$', document.text_before_cursor)
-        if match is None:
-            return
-        token = match.group(1)
-        query = token[2:] if token.startswith('@"') else token[1:]
-        matches = [path for path in self._files if _fuzzy_match(query, path)]
-        for path in sorted(matches, key=lambda value: (len(value), value)):
-            replacement = (
-                f'@"{path}"' if any(character.isspace() for character in path) else f"@{path}"
-            )
-            yield Completion(replacement, start_position=-len(token), display=path)
 
 
 def prepare_prompt(text: str, *, cwd: Path) -> str | list[UserContent]:
@@ -142,13 +115,6 @@ def _completion_path_is_safe(root: Path, relative: str) -> bool:
     except OSError:
         return False
     return path.is_file() and path.is_relative_to(root)
-
-
-def _fuzzy_match(query: str, value: str) -> bool:
-    characters = iter(value.casefold())
-    return all(
-        any(candidate == expected for candidate in characters) for expected in query.casefold()
-    )
 
 
 def _references(text: str) -> list[str]:
