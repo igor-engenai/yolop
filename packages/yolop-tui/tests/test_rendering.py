@@ -9,7 +9,6 @@ from pydantic_ai.messages import (
     ToolReturnPart,
 )
 from rich.console import Console
-from wcwidth import wcswidth
 from yolop_tui.rendering import Transcript
 
 
@@ -29,7 +28,7 @@ def test_transcript_provides_native_rich_markdown() -> None:
     assert "› Question" in plain
     assert "Answer" in plain
     assert "Use Rich directly with code." in plain
-    assert all(wcswidth(line) <= 32 for line in plain.splitlines())
+    assert all(len(line) <= 32 for line in plain.splitlines())
 
 
 def test_tool_output_is_compact_until_details_are_enabled() -> None:
@@ -114,4 +113,4 @@ def test_transcript_wraps_in_a_narrow_terminal() -> None:
 
     plain = _rich_plain(transcript, width=12)
 
-    assert all(wcswidth(line) <= 12 for line in plain.splitlines())
+    assert all(len(line) <= 12 for line in plain.splitlines())

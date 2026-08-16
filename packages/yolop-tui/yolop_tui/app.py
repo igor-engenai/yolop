@@ -54,7 +54,7 @@ async def run_tui[DepsT](
     session_id: str | None = None,
     cwd: Path | None = None,
 ) -> None:
-    """Run the inline terminal host until the user exits."""
+    """Run the full-screen Textual host until the user exits."""
     working_directory = (cwd or Path.cwd()).expanduser().resolve()
     pin = _execution_pin(spec, model=model, model_id=model_id)
     session = (

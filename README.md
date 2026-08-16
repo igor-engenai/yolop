@@ -69,7 +69,7 @@ The packaged command authorizes the current directory and injects it as the Work
 uv run python examples/coding_tui.py
 ```
 
-The TUI is a true inline macOS/Linux terminal application. It keeps normal terminal scrollback and has one Pi-like multiline editor plus one status line. It stores exact Pydantic AI session history in project-local `.yolop/runtime.db`. A new session starts by default. Use `--session <id>` or `/resume` to continue one.
+The TUI is a full-screen Textual application for macOS and Linux terminals, including SSH and tmux. It has one managed, interactive transcript, one Pi-like multiline editor, and one status line. Textual owns scrolling, mouse input, resize handling, and the alternate screen; it restores the terminal when the application exits. The TUI stores exact Pydantic AI session history in project-local `.yolop/runtime.db`. A new session starts by default. Use `--session <id>` or `/resume` to continue one.
 
 While a run streams, Enter sends a native `asap` steering message. Escape cancels the run and saves its partial history. The main keys are:
 
@@ -84,7 +84,7 @@ While a run streams, Enter sends a native `asap` steering message. Escape cancel
 - mouse wheel or trackpad: scroll transcript lines;
 - End: return to the newest output and resume automatic following.
 
-New streamed output follows automatically while the transcript is at the bottom. Scrolling up pauses that following until PageDown, mouse-down scrolling, or End reaches the bottom. Mouse mode is active while the TUI runs; use the terminal's modifier key, usually Shift, for native text selection.
+New streamed output follows automatically while the managed transcript is at the bottom. Scrolling up pauses that following until PageDown, mouse-down scrolling, or End reaches the bottom. Completed tool and thinking entries remain reconstructable, so Ctrl+O and Ctrl+T can update old entries. Mouse mode is active while the TUI runs; use the terminal's modifier key, usually Shift, for native text selection.
 
 The only built-in commands are `/new`, `/resume`, `/help`, and `/quit`. Type `@` to fuzzy-complete project files. Use `@path` or `@"path with spaces"` for an attachment. Quotes, apostrophes, and backticks elsewhere remain ordinary prompt text and are not parsed as shell syntax. Text attachments must stay inside the project, use UTF-8, contain no null bytes, remain below 256 KiB each, and remain below 1 MiB in total.
 
@@ -225,7 +225,7 @@ The core package contains the stateless runtime, AgentSpec capability discovery,
 
 ### `yolop-tui`
 
-[`packages/yolop-tui`](packages/yolop-tui) is the minimal inline terminal host. It owns prompt_toolkit and Rich, the `yolop` command, a bundled Workspace coding AgentSpec, native steering and cancellation, compact tool and thinking views, `@file` policy, and local session selection. The packaged command depends on `yolop-workspace` and injects the current directory. The lower-level `run_tui(...)` still accepts caller-selected native dependencies. The package does not depend on DuckDB.
+[`packages/yolop-tui`](packages/yolop-tui) is the full-screen Textual terminal host. It owns Textual and Rich, the `yolop` command, a bundled Workspace coding AgentSpec, a managed interactive transcript, native steering and cancellation, compact tool and thinking views, `@file` policy, and modal local session selection. The packaged command depends on `yolop-workspace` and injects the current directory. The lower-level `run_tui(...)` still accepts caller-selected native dependencies. The package does not depend on prompt_toolkit or DuckDB.
 
 ### `yolop-duckdb`
 

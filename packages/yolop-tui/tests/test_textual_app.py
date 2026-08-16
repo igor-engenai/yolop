@@ -188,6 +188,10 @@ async def test_textual_transcript_scrolls_and_follows_only_at_bottom() -> None:
         )
         await pilot.pause()
         assert scroll.scroll_y < scroll.max_scroll_y
+        mouse_position = scroll.scroll_y
+        await pilot.resize_terminal(80, 15)
+        await pilot.pause(0.05)
+        assert scroll.scroll_y == mouse_position
         await pilot.press("end")
         await pilot.pause()
 

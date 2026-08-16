@@ -20,7 +20,7 @@ class _HostDeps:
 
 
 def main(argv: Sequence[str] | None = None) -> None:
-    """Run one AgentSpec in the local inline terminal host."""
+    """Run one AgentSpec in the local Textual terminal host."""
     args = _parser().parse_args(argv)
     spec = AgentSpec.from_file(args.agent_spec or _DEFAULT_SPEC)
     if not isinstance(spec.model, str):
@@ -44,7 +44,7 @@ def main(argv: Sequence[str] | None = None) -> None:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run a YoloP agent in the inline terminal host.")
+    parser = argparse.ArgumentParser(description="Run a YoloP agent in the Textual terminal host.")
     parser.add_argument(
         "--agent-spec",
         type=Path,

@@ -18,6 +18,21 @@ from .selection import SelectionOption
 from .suggestions import PromptCompleter, PromptCompletion
 
 
+class _TranscriptScroll(VerticalScroll):
+    def __init__(
+        self,
+        *,
+        on_scroll: Callable[[bool], None],
+        id: str,
+    ) -> None:
+        self._on_transcript_scroll = on_scroll
+        super().__init__(id=id)
+
+    def watch_scroll_y(self, old_value: float, new_value: float) -> None:
+        super().watch_scroll_y(old_value, new_value)
+        self._on_transcript_scroll(self.is_vertical_scroll_end)
+
+
 class _PromptEditor(TextArea):
     BINDINGS = [
         Binding("enter", "submit", priority=True),
@@ -294,7 +309,7 @@ class _YolopTextualApp(App[None]):
         self._follow_transcript = True
 
     def compose(self) -> ComposeResult:
-        with VerticalScroll(id="transcript"):
+        with _TranscriptScroll(on_scroll=self._transcript_scrolled, id="transcript"):
             yield Static(self._transcript_renderable, id="transcript-content")
         yield OptionList(id="completions")
         yield _PromptEditor(
@@ -312,6 +327,9 @@ class _YolopTextualApp(App[None]):
         self.query_one("#editor", TextArea).focus()
         self.call_after_refresh(self.action_transcript_end)
         self._terminal_ready.set()
+
+    def _transcript_scrolled(self, at_end: bool) -> None:
+        self._follow_transcript = at_end
 
     def on_resize(self, _event: events.Resize) -> None:
         if self._follow_transcript:
@@ -331,7 +349,7 @@ class _YolopTextualApp(App[None]):
             options.styles.display = "none"
             return
         options.add_options(
-            Option(completion.value, id=str(index))
+            Option(completion.display, id=str(index))
             for index, completion in enumerate(self._completions)
         )
         options.highlighted = 0

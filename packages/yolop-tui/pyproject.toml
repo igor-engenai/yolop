@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "yolop-tui"
 version = "0.1.0"
-description = "Minimal inline terminal host for YoloP"
+description = "Full-screen Textual terminal host for YoloP"
 requires-python = ">=3.12"
 dependencies = [
     "pydantic-ai-slim>=2.31.0",
