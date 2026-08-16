@@ -111,6 +111,9 @@ class Transcript:
     def add_error(self, text: str) -> None:
         self._entries.append(_TextEntry("error", text))
 
+    def add_notice(self, text: str) -> None:
+        self._entries.append(_TextEntry("notice", text))
+
     def toggle_tools(self) -> None:
         self.show_tools = not self.show_tools
 
@@ -146,6 +149,8 @@ class Transcript:
                 console.print(Markdown(entry.text))
             elif entry.role == "thinking":
                 console.print(Text("thinking", style="dim"))
+                console.print(Text(entry.text, style="dim"), overflow="fold")
+            elif entry.role == "notice":
                 console.print(Text(entry.text, style="dim"), overflow="fold")
             else:
                 console.print(Text(f"Error: {entry.text}", style="red"), overflow="fold")

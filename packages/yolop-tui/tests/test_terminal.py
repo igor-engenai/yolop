@@ -103,3 +103,28 @@ async def test_ctrl_c_clears_and_ctrl_d_exits_only_with_empty_editor() -> None:
             await asyncio.wait_for(running, timeout=1)
 
     assert submitted == []
+
+
+async def test_up_moves_within_multiline_input_then_reads_prompt_history() -> None:
+    submitted: list[str] = []
+    output = CapturingOutput()
+
+    with create_pipe_input() as pipe_input:
+        with create_app_session(input=pipe_input, output=output):
+            terminal = InlineTerminal(on_submit=submitted.append)
+            running = asyncio.create_task(terminal.run())
+            await terminal.wait_until_ready()
+
+            pipe_input.send_text("first prompt\r")
+            await asyncio.sleep(0.01)
+            pipe_input.send_text("line1\nline2")
+            pipe_input.send_bytes(b"\x1b[A")
+            pipe_input.send_text("X\r")
+            await asyncio.sleep(0.01)
+            pipe_input.send_bytes(b"\x1b[A")
+            pipe_input.send_text("\r")
+            await asyncio.sleep(0.01)
+            terminal.stop()
+            await running
+
+    assert submitted == ["first prompt", "line1X\nline2", "line1X\nline2"]

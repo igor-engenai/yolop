@@ -29,8 +29,8 @@ from pydantic_ai.models.function import (
     FunctionModel,
 )
 from pydantic_ai.toolsets.function import FunctionToolset
-from pytest import MonkeyPatch
-from yolop_session import ExecutionPin
+from pytest import MonkeyPatch, raises
+from yolop_session import ExecutionPin, SessionPinMismatchError
 from yolop_sqlite_session import SQLiteRuntimeStore
 from yolop_tui import run_tui
 
@@ -564,6 +564,201 @@ async def test_session_conflict_does_not_overwrite_external_history(tmp_path: Pa
             await asyncio.wait_for(running, timeout=1)
 
     assert (await store.load_session("test", session.id)).messages == external_messages
+
+
+async def test_help_lists_only_the_minimal_commands(tmp_path: Path) -> None:
+    output = CapturingOutput()
+    store = SQLiteRuntimeStore(tmp_path / "runtime.db")
+    with create_pipe_input() as pipe_input:
+        with create_app_session(input=pipe_input, output=output):
+            running = asyncio.create_task(
+                run_tui(
+                    AgentSpec(),
+                    store=store,
+                    namespace="test",
+                    deps=None,
+                    deps_type=type(None),
+                    model="test:model",
+                    model_id="test:model",
+                    cwd=tmp_path,
+                )
+            )
+            await _wait_for_output(output, "╭─ prompt")
+            pipe_input.send_text("/help\r")
+            await _wait_for_output(output, "Commands: /new  /resume  /help  /quit")
+            pipe_input.send_text("/quit\r")
+            await asyncio.wait_for(running, timeout=1)
+
+
+async def test_new_command_switches_to_a_fresh_durable_session(tmp_path: Path) -> None:
+    calls = 0
+
+    async def respond(
+        _messages: list[ModelMessage],
+        _info: AgentInfo,
+    ) -> AsyncIterator[str]:
+        nonlocal calls
+        calls += 1
+        yield "unexpected"
+
+    output = CapturingOutput()
+    store = SQLiteRuntimeStore(tmp_path / "runtime.db")
+    with create_pipe_input() as pipe_input:
+        with create_app_session(input=pipe_input, output=output):
+            running = asyncio.create_task(
+                run_tui(
+                    AgentSpec(),
+                    store=store,
+                    namespace="test",
+                    deps=None,
+                    deps_type=type(None),
+                    model=FunctionModel(stream_function=respond),
+                    model_id="test:model",
+                    cwd=tmp_path,
+                )
+            )
+            await _wait_for_output(output, "╭─ prompt")
+            first_id = (await store.list_sessions("test"))[0]
+            pipe_input.send_text("/new\r")
+            async with asyncio.timeout(1):
+                while len(await store.list_sessions("test")) < 2:
+                    await asyncio.sleep(0)
+            second_id = next(
+                session_id
+                for session_id in await store.list_sessions("test")
+                if session_id != first_id
+            )
+            await _wait_for_output(output, second_id[:8])
+            pipe_input.send_text("/quit\r")
+            await asyncio.wait_for(running, timeout=1)
+
+    assert calls == 0
+
+
+async def test_session_command_is_rejected_while_a_run_is_active(tmp_path: Path) -> None:
+    model_stopped = asyncio.Event()
+    wait_forever = asyncio.Event()
+
+    async def respond(
+        _messages: list[ModelMessage],
+        _info: AgentInfo,
+    ) -> AsyncIterator[str]:
+        try:
+            yield "Working"
+            await wait_forever.wait()
+        finally:
+            model_stopped.set()
+
+    output = CapturingOutput()
+    store = SQLiteRuntimeStore(tmp_path / "runtime.db")
+    with create_pipe_input() as pipe_input:
+        with create_app_session(input=pipe_input, output=output):
+            running = asyncio.create_task(
+                run_tui(
+                    AgentSpec(),
+                    store=store,
+                    namespace="test",
+                    deps=None,
+                    deps_type=type(None),
+                    model=FunctionModel(stream_function=respond),
+                    model_id="test:model",
+                    cwd=tmp_path,
+                )
+            )
+            await _wait_for_output(output, "╭─ prompt")
+            pipe_input.send_text("Start\r")
+            await _wait_for_output(output, "Working")
+            pipe_input.send_text("/new\r")
+            await _wait_for_output(output, "Cancel the active run before changing sessions")
+            assert len(await store.list_sessions("test")) == 1
+            pipe_input.send_bytes(b"\x1b")
+            await asyncio.wait_for(model_stopped.wait(), timeout=1)
+            session_id = (await store.list_sessions("test"))[0]
+            async with asyncio.timeout(1):
+                while not (await store.load_session("test", session_id)).messages:
+                    await asyncio.sleep(0)
+            pipe_input.send_text("/quit\r")
+            await asyncio.wait_for(running, timeout=1)
+
+
+async def test_resume_command_fuzzy_selects_a_pinned_session(tmp_path: Path) -> None:
+    calls = 0
+
+    async def respond(
+        _messages: list[ModelMessage],
+        _info: AgentInfo,
+    ) -> AsyncIterator[str]:
+        nonlocal calls
+        calls += 1
+        yield "unexpected"
+
+    spec = AgentSpec()
+    pin = ExecutionPin.from_spec(spec, model_id="test:model")
+    store = SQLiteRuntimeStore(tmp_path / "runtime.db")
+    target = await store.create_session("test", pin=pin)
+    target = await store.replace_session(
+        "test",
+        target.id,
+        expected_revision=target.revision,
+        messages=[
+            ModelRequest(parts=[UserPromptPart("Target conversation")]),
+            ModelResponse(parts=[TextPart("Existing answer")]),
+        ],
+    )
+    other_spec = AgentSpec(instructions="other")
+    other = await store.create_session(
+        "test",
+        pin=ExecutionPin.from_spec(other_spec, model_id="test:model"),
+    )
+
+    output = CapturingOutput()
+    with create_pipe_input() as pipe_input:
+        with create_app_session(input=pipe_input, output=output):
+            running = asyncio.create_task(
+                run_tui(
+                    spec,
+                    store=store,
+                    namespace="test",
+                    deps=None,
+                    deps_type=type(None),
+                    model=FunctionModel(stream_function=respond),
+                    model_id="test:model",
+                    cwd=tmp_path,
+                )
+            )
+            await _wait_for_output(output, "╭─ prompt")
+            pipe_input.send_text("/resume\r")
+            await _wait_for_output(output, "Target conversation")
+            await _wait_for_output(output, "(empty session)")
+            assert other.id not in output.text
+            pipe_input.send_text("Target\r")
+            await _wait_for_output(output, target.id[:8])
+            await _wait_for_output(output, "Existing answer")
+            pipe_input.send_text("/quit\r")
+            await asyncio.wait_for(running, timeout=1)
+
+    assert calls == 0
+
+
+async def test_tui_rejects_a_session_pinned_to_another_agent(tmp_path: Path) -> None:
+    store = SQLiteRuntimeStore(tmp_path / "runtime.db")
+    other = await store.create_session(
+        "test",
+        pin=ExecutionPin.from_spec(AgentSpec(instructions="other"), model_id="test:model"),
+    )
+
+    with raises(SessionPinMismatchError, match="pinned to different agent configuration"):
+        await run_tui(
+            AgentSpec(),
+            store=store,
+            namespace="test",
+            deps=None,
+            deps_type=type(None),
+            model="test:model",
+            model_id="test:model",
+            session_id=other.id,
+            cwd=tmp_path,
+        )
 
 
 async def test_thinking_is_hidden_until_ctrl_t(tmp_path: Path) -> None:

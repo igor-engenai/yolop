@@ -1,13 +1,20 @@
 import asyncio
 import logging
-from collections.abc import AsyncIterable, Callable
+from collections.abc import AsyncIterable, Callable, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from pydantic_ai import AgentSpec, AgentStreamEvent, EnqueuedMessagesEvent, RunContext
 from pydantic_ai.exceptions import RunCancelled
-from pydantic_ai.messages import ModelMessage, ModelResponse, UserContent
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    TextContent,
+    UserContent,
+    UserPromptPart,
+)
 from pydantic_ai.models import KnownModelName, Model
 from pydantic_ai.run import EnqueueContent
 from yolop_session import (
@@ -15,14 +22,16 @@ from yolop_session import (
     RuntimeSessionSnapshot,
     RuntimeStore,
     SessionConflictError,
+    SessionNotFoundError,
     ensure_session_pin,
 )
 
 from yolop import Yolop
 
-from .files import FileReferenceCompleter, FileReferenceError, prepare_prompt
+from .completion import TuiCompleter
+from .files import FileReferenceError, prepare_prompt
 from .rendering import Transcript
-from .terminal import InlineTerminal
+from .terminal import InlineTerminal, SelectionOption
 
 _LOGGER = logging.getLogger(__name__)
 _SESSION_LOCK_TIMEOUT = 30.0
@@ -71,8 +80,15 @@ async def run_tui[DepsT](
         )
 
     def submit(text: str) -> None:
+        command = text.strip()
         if active_turn is None:
             submissions.put_nowait(text)
+        elif command == "/help":
+            transcript.add_notice("Commands: /new  /resume  /help  /quit")
+            render_transcript()
+        elif command.startswith("/"):
+            transcript.add_error("Cancel the active run before changing sessions")
+            render_transcript()
         else:
             active_turn.enqueue(text)
 
@@ -98,7 +114,7 @@ async def run_tui[DepsT](
         on_cancel=cancel,
         on_toggle_tools=toggle_tools,
         on_toggle_thinking=toggle_thinking,
-        completer=FileReferenceCompleter(working_directory),
+        completer=TuiCompleter(working_directory),
     )
     render_transcript()
     refresh_status()
@@ -107,8 +123,36 @@ async def run_tui[DepsT](
         nonlocal session
         while True:
             text = await submissions.get()
-            if text.strip() == "/quit":
+            command = text.strip()
+            if command == "/quit":
                 return
+            if command == "/new":
+                session = await store.create_session(namespace, pin=pin)
+                transcript.reset(session.messages)
+                transcript.add_notice(f"New session: {session.id}")
+                render_transcript()
+                refresh_status()
+                continue
+            if command == "/resume":
+                selected = await terminal.choose(
+                    await _session_options(store, namespace=namespace, pin=pin)
+                )
+                if selected is not None:
+                    session = await store.load_session(namespace, selected)
+                    ensure_session_pin(session, pin)
+                    transcript.reset(session.messages)
+                    transcript.add_notice(f"Resumed session: {session.id}")
+                    render_transcript()
+                    refresh_status()
+                continue
+            if command == "/help":
+                transcript.add_notice("Commands: /new  /resume  /help  /quit")
+                render_transcript()
+                continue
+            if command.startswith("/"):
+                transcript.add_error(f"Unknown command: {command}")
+                render_transcript()
+                continue
             try:
                 prompt = prepare_prompt(text, cwd=working_directory)
             except FileReferenceError as error:
@@ -279,6 +323,55 @@ def _execution_pin(
     if not resolved_id:
         raise ValueError("model_id is required when the resolved model is not a string reference")
     return ExecutionPin.from_spec(spec, model_id=resolved_id)
+
+
+async def _session_options(
+    store: RuntimeStore,
+    *,
+    namespace: str,
+    pin: ExecutionPin,
+) -> list[SelectionOption]:
+    candidates: list[tuple[float, SelectionOption]] = []
+    for session_id in await store.list_sessions(namespace):
+        try:
+            snapshot = await store.load_session(namespace, session_id)
+        except SessionNotFoundError:
+            continue
+        if snapshot.pin != pin:
+            continue
+        latest_prompt = ""
+        latest_timestamp = 0.0
+        for message in reversed(snapshot.messages):
+            if not isinstance(message, ModelRequest):
+                continue
+            user_parts = [part for part in message.parts if isinstance(part, UserPromptPart)]
+            if not user_parts:
+                continue
+            latest_prompt = _display_user_content(user_parts[-1].content)
+            latest_timestamp = user_parts[-1].timestamp.timestamp()
+            break
+        summary = (
+            _compact(" ".join(latest_prompt.split()), 48) if latest_prompt else "(empty session)"
+        )
+        candidates.append(
+            (
+                latest_timestamp,
+                SelectionOption(snapshot.id, f"{snapshot.id}  {summary}"),
+            )
+        )
+    candidates.sort(key=lambda item: (-item[0], item[1].value))
+    return [option for _timestamp, option in candidates]
+
+
+def _display_user_content(content: str | Sequence[UserContent]) -> str:
+    if isinstance(content, str):
+        return content
+    for item in content:
+        if isinstance(item, str):
+            return item
+        if isinstance(item, TextContent) and not item.content.startswith("<yolop-file "):
+            return item.content
+    return ""
 
 
 def _compact(value: str, limit: int) -> str:

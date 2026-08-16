@@ -1,16 +1,31 @@
 import asyncio
 from collections.abc import Callable
+from dataclasses import dataclass
 
 from prompt_toolkit.application import Application
 from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.completion import Completer
 from prompt_toolkit.document import Document
 from prompt_toolkit.formatted_text import AnyFormattedText, fragment_list_to_text, to_formatted_text
+from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import HSplit, Layout, VSplit, Window
 from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl, UIContent, UIControl
 from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.styles import Style
+
+
+@dataclass(frozen=True)
+class SelectionOption:
+    value: str
+    label: str
+
+
+@dataclass
+class _Selection:
+    options: tuple[SelectionOption, ...]
+    future: asyncio.Future[str | None]
+    selected: int = 0
 
 
 class InlineTerminal:
@@ -32,11 +47,15 @@ class InlineTerminal:
         self._transcript: AnyFormattedText = ""
         self._transcript_lines = 0
         self._status = ""
+        self._selection: _Selection | None = None
         self._ready = asyncio.Event()
         self._buffer = Buffer(
             completer=completer,
             complete_while_typing=completer is not None,
+            enable_history_search=True,
+            history=InMemoryHistory(),
             multiline=True,
+            on_text_changed=lambda _buffer: self._selection_query_changed(),
         )
         self._application = self._build_application()
 
@@ -46,6 +65,22 @@ class InlineTerminal:
 
     async def wait_until_ready(self) -> None:
         await self._ready.wait()
+
+    async def choose(self, options: list[SelectionOption]) -> str | None:
+        if self._selection is not None:
+            raise RuntimeError("A terminal selection is already active")
+        future = asyncio.get_running_loop().create_future()
+        selection = _Selection(tuple(options), future)
+        self._selection = selection
+        self._buffer.reset()
+        self._application.invalidate()
+        try:
+            return await future
+        finally:
+            if self._selection is selection:
+                self._selection = None
+                self._buffer.reset()
+                self._application.invalidate()
 
     @property
     def width(self) -> int:
@@ -78,19 +113,46 @@ class InlineTerminal:
 
         @bindings.add("enter")
         def submit(_event) -> None:
+            if self._selection is not None:
+                self._finish_selection()
+                return
             text = self._buffer.text
             if not text.strip():
                 return
+            if not text.lstrip().startswith("/"):
+                self._buffer.append_to_history()
             self._buffer.reset()
             self._on_submit(text)
 
         @bindings.add("c-j")
         def newline(_event) -> None:
-            self._buffer.insert_text("\n")
+            if self._selection is None:
+                self._buffer.insert_text("\n")
+
+        @bindings.add("up")
+        def up(_event) -> None:
+            if self._selection is not None:
+                self._move_selection(-1)
+            elif self._buffer.document.cursor_position_row == 0:
+                self._buffer.history_backward()
+            else:
+                self._buffer.cursor_up()
+
+        @bindings.add("down")
+        def down(_event) -> None:
+            if self._selection is not None:
+                self._move_selection(1)
+            elif self._buffer.document.cursor_position_row == self._buffer.document.line_count - 1:
+                self._buffer.history_forward()
+            else:
+                self._buffer.cursor_down()
 
         @bindings.add("escape")
         def cancel(_event) -> None:
-            self._on_cancel()
+            if self._selection is not None:
+                self._cancel_selection()
+            else:
+                self._on_cancel()
 
         @bindings.add("c-c")
         def clear_editor(_event) -> None:
@@ -106,7 +168,7 @@ class InlineTerminal:
 
         @bindings.add("c-d")
         def exit_when_empty(_event) -> None:
-            if not self._buffer.text:
+            if not self._buffer.text and self._selection is None:
                 self.stop()
 
         transcript = Window(
@@ -114,7 +176,15 @@ class InlineTerminal:
             height=self._transcript_height,
             wrap_lines=True,
         )
-        top_border = Window(content=_BorderControl(top=True), height=1)
+        selector = Window(
+            content=FormattedTextControl(self._selection_fragments),
+            height=self._selection_height,
+            wrap_lines=False,
+        )
+        top_border = Window(
+            content=_BorderControl(top=True, label=self._editor_label),
+            height=1,
+        )
         editor = Window(
             content=BufferControl(buffer=self._buffer),
             height=Dimension(min=1, max=8, preferred=1),
@@ -135,13 +205,15 @@ class InlineTerminal:
         )
         application = Application(
             layout=Layout(
-                HSplit([transcript, top_border, editor_frame, bottom_border, status]),
+                HSplit([transcript, selector, top_border, editor_frame, bottom_border, status]),
                 editor,
             ),
             key_bindings=bindings,
             style=Style.from_dict(
                 {
                     "border": "ansibrightblack",
+                    "selection": "reverse",
+                    "selection.muted": "ansibrightblack",
                     "status": "ansibrightblack",
                 }
             ),
@@ -155,15 +227,94 @@ class InlineTerminal:
     def _transcript_height(self) -> Dimension:
         return Dimension.exact(self._transcript_lines)
 
+    def _selection_height(self) -> Dimension:
+        if self._selection is None:
+            return Dimension.exact(0)
+        return Dimension.exact(max(1, min(5, len(self._selection_matches()))))
+
+    def _selection_fragments(self) -> list[tuple[str, str]]:
+        selection = self._selection
+        if selection is None:
+            return []
+        matches = self._selection_matches()
+        if not matches:
+            return [("class:selection.muted", "  No matching sessions")]
+        selection.selected = min(selection.selected, len(matches) - 1)
+        start = max(0, min(selection.selected, len(matches) - 5))
+        fragments: list[tuple[str, str]] = []
+        for index, option in enumerate(matches[start : start + 5], start=start):
+            style = "class:selection" if index == selection.selected else ""
+            prefix = "> " if index == selection.selected else "  "
+            fragments.append((style, prefix + option.label))
+            if index < min(start + 4, len(matches) - 1):
+                fragments.append(("", "\n"))
+        return fragments
+
+    def _selection_matches(self) -> list[SelectionOption]:
+        if self._selection is None:
+            return []
+        query = self._buffer.text.casefold()
+        return [
+            option
+            for option in self._selection.options
+            if _fuzzy_match(query, option.label.casefold())
+        ]
+
+    def _selection_query_changed(self) -> None:
+        if self._selection is not None:
+            self._selection.selected = 0
+            self._application.invalidate()
+
+    def _move_selection(self, direction: int) -> None:
+        assert self._selection is not None
+        matches = self._selection_matches()
+        if matches:
+            self._selection.selected = max(
+                0,
+                min(len(matches) - 1, self._selection.selected + direction),
+            )
+            self._application.invalidate()
+
+    def _finish_selection(self) -> None:
+        assert self._selection is not None
+        matches = self._selection_matches()
+        if not matches:
+            return
+        value = matches[self._selection.selected].value
+        selection = self._selection
+        self._selection = None
+        self._buffer.reset()
+        if not selection.future.done():
+            selection.future.set_result(value)
+        self._application.invalidate()
+
+    def _cancel_selection(self) -> None:
+        assert self._selection is not None
+        selection = self._selection
+        self._selection = None
+        self._buffer.reset()
+        if not selection.future.done():
+            selection.future.set_result(None)
+        self._application.invalidate()
+
+    def _editor_label(self) -> str:
+        return "resume" if self._selection is not None else "prompt"
+
 
 class _BorderControl(UIControl):
-    def __init__(self, *, top: bool) -> None:
+    def __init__(self, *, top: bool, label: Callable[[], str] | None = None) -> None:
         self._top = top
+        self._label = label or (lambda: "")
 
     def create_content(self, width: int, height: int) -> UIContent:
         if self._top:
-            label = "╭─ prompt "
+            label = f"╭─ {self._label()} "
             line = label + "─" * max(0, width - len(label) - 1) + "╮"
         else:
             line = "╰" + "─" * max(0, width - 2) + "╯"
         return UIContent(get_line=lambda _index: [("class:border", line[:width])], line_count=1)
+
+
+def _fuzzy_match(query: str, value: str) -> bool:
+    characters = iter(value)
+    return all(any(candidate == expected for candidate in characters) for expected in query)
