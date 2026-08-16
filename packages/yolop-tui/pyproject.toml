@@ -1,0 +1,20 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "yolop-tui"
+version = "0.1.0"
+description = "Minimal inline terminal host for YoloP"
+requires-python = ">=3.12"
+dependencies = [
+    "prompt-toolkit>=3.0.52,<4",
+    "pydantic-ai-slim>=2.31.0",
+    "rich>=14.2.0,<15",
+    "yolop>=0.1.0",
+    "yolop-session>=0.1.0",
+    "yolop-sqlite-session>=0.1.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["yolop_tui"]
