@@ -13,6 +13,21 @@ dependencies = [
     "pyyaml>=6.0.3",
 ]
 
+[project.optional-dependencies]
+workspace = ["yolop-workspace>=0.1.0,<0.2.0"]
+duckdb = ["yolop-duckdb>=0.1.0,<0.2.0"]
+web = ["yolop-webserver>=0.1.0,<0.2.0"]
+openai = ["pydantic-ai-slim[openai]>=2.31.0"]
+all = [
+    "pydantic-ai-slim[openai]>=2.31.0",
+    "yolop-duckdb>=0.1.0,<0.2.0",
+    "yolop-session>=0.1.0,<0.2.0",
+    "yolop-sqlite-session>=0.1.0,<0.2.0",
+    "yolop-webserver>=0.1.0,<0.2.0",
+    "yolop-workspace>=0.1.0,<0.2.0",
+    "yolop-workspace-session>=0.1.0,<0.2.0",
+]
+
 [project.entry-points."yolop.capabilities"]
 Skills = "yolop.skills:Skills"
 

@@ -4,6 +4,29 @@ YoloP is a small runtime for agents defined with Pydantic AI `AgentSpec`.
 
 The core is stateless. Pydantic AI owns the model and tool loop. AgentSpec selects installed capability code. Hosts own AgentSpec files, trusted namespaces, dependencies, persistence, and transport.
 
+## Install
+
+Install only the core runtime:
+
+```bash
+uv add yolop
+```
+
+Install all YoloP hosts, capabilities, persistence packages, and OpenAI model support:
+
+```bash
+uv add "yolop[all]"
+```
+
+You can install smaller feature sets instead:
+
+- `uv add "yolop[workspace]"` installs the Workspace capability.
+- `uv add "yolop[duckdb]"` installs the DuckDB capability.
+- `uv add "yolop[web]"` installs the web host and its runtime persistence.
+- `uv add "yolop[openai]"` installs OpenAI model support.
+
+The feature packages remain separate Python distributions. A package index must contain compatible `0.1.x` releases of each selected YoloP distribution. For development in this repository, use `uv sync --all-packages`.
+
 ## Try the coding AgentSpec
 
 ```bash

@@ -7,7 +7,7 @@ name = "yolop-workspace-session"
 version = "0.1.0"
 description = "Workspace-local runtime persistence for YoloP hosts"
 requires-python = ">=3.12"
-dependencies = ["yolop-sqlite-session>=0.1.0"]
+dependencies = ["yolop-sqlite-session>=0.1.0,<0.2.0"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["yolop_workspace_session"]

@@ -1063,6 +1063,29 @@ dependencies = [
     { name = "pyyaml" },
 ]
 
+[package.optional-dependencies]
+all = [
+    { name = "pydantic-ai-slim", extra = ["openai"] },
+    { name = "yolop-duckdb" },
+    { name = "yolop-session" },
+    { name = "yolop-sqlite-session" },
+    { name = "yolop-webserver" },
+    { name = "yolop-workspace" },
+    { name = "yolop-workspace-session" },
+]
+duckdb = [
+    { name = "yolop-duckdb" },
+]
+openai = [
+    { name = "pydantic-ai-slim", extra = ["openai"] },
+]
+web = [
+    { name = "yolop-webserver" },
+]
+workspace = [
+    { name = "yolop-workspace" },
+]
+
 [package.dev-dependencies]
 dev = [
     { name = "httpx" },
@@ -1081,9 +1104,21 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "pydantic-ai-slim", extras = ["openai"], marker = "extra == 'all'", specifier = ">=2.31.0" },
+    { name = "pydantic-ai-slim", extras = ["openai"], marker = "extra == 'openai'", specifier = ">=2.31.0" },
     { name = "pydantic-ai-slim", extras = ["spec"], specifier = ">=2.31.0" },
     { name = "pyyaml", specifier = ">=6.0.3" },
+    { name = "yolop-duckdb", marker = "extra == 'all'", editable = "packages/yolop-duckdb" },
+    { name = "yolop-duckdb", marker = "extra == 'duckdb'", editable = "packages/yolop-duckdb" },
+    { name = "yolop-session", marker = "extra == 'all'", editable = "packages/yolop-session" },
+    { name = "yolop-sqlite-session", marker = "extra == 'all'", editable = "packages/yolop-sqlite-session" },
+    { name = "yolop-webserver", marker = "extra == 'all'", editable = "packages/yolop-webserver" },
+    { name = "yolop-webserver", marker = "extra == 'web'", editable = "packages/yolop-webserver" },
+    { name = "yolop-workspace", marker = "extra == 'all'", editable = "packages/yolop-workspace" },
+    { name = "yolop-workspace", marker = "extra == 'workspace'", editable = "packages/yolop-workspace" },
+    { name = "yolop-workspace-session", marker = "extra == 'all'", editable = "packages/yolop-workspace-session" },
 ]
+provides-extras = ["workspace", "duckdb", "web", "openai", "all"]
 
 [package.metadata.requires-dev]
 dev = [
