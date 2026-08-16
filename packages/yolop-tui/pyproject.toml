@@ -14,6 +14,7 @@ dependencies = [
     "yolop>=0.1.0",
     "yolop-session>=0.1.0",
     "yolop-sqlite-session>=0.1.0",
+    "yolop-workspace>=0.1.0",
 ]
 
 [project.scripts]

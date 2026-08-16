@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 from collections.abc import Sequence
+from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
 
@@ -10,7 +11,12 @@ from yolop_sqlite_session import SQLiteRuntimeStore
 
 from .app import run_tui
 
-_DEFAULT_SPEC = Path(__file__).with_name("agent_specs") / "chat.yaml"
+_DEFAULT_SPEC = Path(__file__).with_name("agent_specs") / "coding.yaml"
+
+
+@dataclass(frozen=True)
+class _HostDeps:
+    workspace: Path
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -22,14 +28,17 @@ def main(argv: Sequence[str] | None = None) -> None:
     pin = ExecutionPin.from_spec(spec, model_id=spec.model)
     namespace = _execution_namespace(pin)
     store = SQLiteRuntimeStore(args.database)
+    workspace = Path.cwd().resolve()
+    deps = _HostDeps(workspace=workspace)
     asyncio.run(
         run_tui(
             spec,
             store=store,
             namespace=namespace,
-            deps=None,
-            deps_type=type(None),
+            deps=deps,
+            deps_type=_HostDeps,
             session_id=args.session,
+            cwd=workspace,
         )
     )
 
@@ -39,7 +48,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--agent-spec",
         type=Path,
-        help="AgentSpec YAML file; defaults to the bundled chat agent",
+        help="AgentSpec YAML file; defaults to the bundled Workspace coding agent",
     )
     parser.add_argument(
         "--database",

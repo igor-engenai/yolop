@@ -1254,6 +1254,7 @@ dependencies = [
     { name = "yolop" },
     { name = "yolop-session" },
     { name = "yolop-sqlite-session" },
+    { name = "yolop-workspace" },
 ]
 
 [package.metadata]
@@ -1264,6 +1265,7 @@ requires-dist = [
     { name = "yolop", editable = "." },
     { name = "yolop-session", editable = "packages/yolop-session" },
     { name = "yolop-sqlite-session", editable = "packages/yolop-sqlite-session" },
+    { name = "yolop-workspace", editable = "packages/yolop-workspace" },
 ]
 
 [[package]]

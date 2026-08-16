@@ -50,7 +50,7 @@ The API key is not part of AgentSpec. Pydantic AI reads `OPENAI_API_KEY` from th
 
 ## Run the terminal host
 
-Start the bundled chat AgentSpec:
+Start the bundled Workspace coding AgentSpec:
 
 ```bash
 export OPENAI_API_KEY="your-key"
@@ -63,7 +63,7 @@ Use an external AgentSpec instead:
 uv run yolop --agent-spec examples/agents/chat.yaml
 ```
 
-The packaged command uses dependency-free host values. An AgentSpec that needs Workspace or another host resource needs an embedding host that injects those native dependencies. Run the coding composition example with:
+The packaged command authorizes the current directory and injects it as the Workspace dependency. The bundled AgentSpec can read and write project files and run its explicit shell command allowlist. It uses `openai:gpt-5.6-luna` with high thinking and does not include Skills. An external AgentSpec fully replaces the bundled data and can select Workspace against the same host-authorized current directory. Other host resources still need an embedding host that injects them. Run the custom coding composition example with:
 
 ```bash
 uv run python examples/coding_tui.py
@@ -220,7 +220,7 @@ The core package contains the stateless runtime, AgentSpec capability discovery,
 
 ### `yolop-tui`
 
-[`packages/yolop-tui`](packages/yolop-tui) is the minimal inline terminal host. It owns prompt_toolkit and Rich, the `yolop` command, a bundled fallback chat AgentSpec, native steering and cancellation, compact tool and thinking views, `@file` policy, and local session selection. It accepts native host dependencies through `run_tui(...)` and does not depend on Workspace or DuckDB.
+[`packages/yolop-tui`](packages/yolop-tui) is the minimal inline terminal host. It owns prompt_toolkit and Rich, the `yolop` command, a bundled Workspace coding AgentSpec, native steering and cancellation, compact tool and thinking views, `@file` policy, and local session selection. The packaged command depends on `yolop-workspace` and injects the current directory. The lower-level `run_tui(...)` still accepts caller-selected native dependencies. The package does not depend on DuckDB.
 
 ### `yolop-duckdb`
 

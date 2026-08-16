@@ -1,4 +1,5 @@
 import asyncio
+import json
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -7,8 +8,9 @@ from prompt_toolkit.data_structures import Size
 from prompt_toolkit.input.defaults import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 from pydantic_ai import AgentSpec
-from pydantic_ai.messages import ModelMessage
-from pydantic_ai.models.function import AgentInfo, FunctionModel
+from pydantic_ai.messages import ModelMessage, ModelRequest, ToolReturnPart
+from pydantic_ai.models.function import AgentInfo, DeltaToolCall, DeltaToolCalls, FunctionModel
+from yolop_tui import __file__ as tui_package_file
 from yolop_tui import run_tui
 from yolop_workspace_session import WorkspaceRuntimeStore
 
@@ -73,3 +75,59 @@ async def test_coding_tui_injects_workspace_dependencies(tmp_path: Path) -> None
             await asyncio.wait_for(running, timeout=1)
 
     assert (tmp_path / ".yolop" / "runtime.db").is_file()
+
+
+async def test_bundled_tui_agent_can_write_to_the_injected_workspace(tmp_path: Path) -> None:
+    async def respond(
+        messages: list[ModelMessage],
+        info: AgentInfo,
+    ) -> AsyncIterator[str | DeltaToolCalls]:
+        tool_returns = [
+            part
+            for message in messages
+            if isinstance(message, ModelRequest)
+            for part in message.parts
+            if isinstance(part, ToolReturnPart)
+        ]
+        if not tool_returns:
+            assert {tool.name for tool in info.function_tools} >= {"write_file", "run_command"}
+            yield {
+                0: DeltaToolCall(
+                    name="write_file",
+                    json_args=json.dumps(
+                        {"path": "default-agent.txt", "content": "workspace enabled"}
+                    ),
+                    tool_call_id="write-default-agent",
+                )
+            }
+        else:
+            yield "Default Workspace works"
+
+    output = CapturingOutput()
+    spec = AgentSpec.from_file(Path(tui_package_file).parent / "agent_specs" / "coding.yaml")
+    store = WorkspaceRuntimeStore(tmp_path)
+    with create_pipe_input() as pipe_input:
+        with create_app_session(input=pipe_input, output=output):
+            running = asyncio.create_task(
+                run_tui(
+                    spec,
+                    store=store,
+                    namespace="default-coding",
+                    deps=HostDeps(workspace=tmp_path),
+                    deps_type=HostDeps,
+                    model=FunctionModel(stream_function=respond),
+                    model_id="test:model",
+                    cwd=tmp_path,
+                )
+            )
+            async with asyncio.timeout(1):
+                while "╭─ prompt" not in output.text:
+                    await asyncio.sleep(0)
+            pipe_input.send_text("Write the test file\r")
+            async with asyncio.timeout(1):
+                while "Default Workspace works" not in output.text:
+                    await asyncio.sleep(0)
+            pipe_input.send_text("/quit\r")
+            await asyncio.wait_for(running, timeout=1)
+
+    assert (tmp_path / "default-agent.txt").read_text() == "workspace enabled"
