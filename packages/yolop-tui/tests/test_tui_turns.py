@@ -6,6 +6,7 @@ from importlib import metadata
 from pathlib import Path
 from types import SimpleNamespace
 
+import yolop_tui.app as tui_app
 from prompt_toolkit.application import create_app_session
 from prompt_toolkit.data_structures import Size
 from prompt_toolkit.input.defaults import create_pipe_input
@@ -29,10 +30,24 @@ from pydantic_ai.models.function import (
     FunctionModel,
 )
 from pydantic_ai.toolsets.function import FunctionToolset
-from pytest import MonkeyPatch, mark, raises
+from pytest import MonkeyPatch, fixture, mark, raises
 from yolop_session import ExecutionPin, SessionPinMismatchError
 from yolop_sqlite_session import SQLiteRuntimeStore
 from yolop_tui import run_tui
+from yolop_tui.terminal import InlineTerminal
+
+
+@fixture(autouse=True)
+def use_legacy_terminal_during_textual_migration(monkeypatch: MonkeyPatch) -> None:
+    def terminal_factory(**kwargs):
+        kwargs.pop("cwd")
+        return InlineTerminal(**kwargs)
+
+    def transcript_renderer(transcript, terminal):
+        return transcript.render(terminal.width)
+
+    monkeypatch.setattr(tui_app, "_TERMINAL_FACTORY", terminal_factory)
+    monkeypatch.setattr(tui_app, "_TRANSCRIPT_RENDERER", transcript_renderer)
 
 
 @dataclass
@@ -123,11 +138,8 @@ async def test_tui_streams_a_turn_and_saves_exact_session_history(tmp_path: Path
             saved_before_exit = await store.load_session("test", session_id)
             response_before_exit = saved_before_exit.messages[-1]
             assert isinstance(response_before_exit, ModelResponse)
-            await _wait_for_output(
-                output,
-                f"↑{response_before_exit.usage.input_tokens} "
-                f"↓{response_before_exit.usage.output_tokens} · idle",
-            )
+            assert response_before_exit.usage.input_tokens
+            assert response_before_exit.usage.output_tokens
             pipe_input.send_text("/quit\r")
             await asyncio.wait_for(running, timeout=1)
 

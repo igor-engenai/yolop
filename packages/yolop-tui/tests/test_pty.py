@@ -11,7 +11,7 @@ import pytest
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="Unix pseudo-terminal test")
 
 
-def test_cli_runs_inline_and_ctrl_c_exits_in_a_real_pseudo_terminal(tmp_path: Path) -> None:
+def test_textual_cli_enters_and_restores_a_real_pseudo_terminal(tmp_path: Path) -> None:
     master, slave = pty.openpty()
     environment = {**os.environ, "TERM": "xterm-256color"}
     process = subprocess.Popen(
@@ -27,11 +27,11 @@ def test_cli_runs_inline_and_ctrl_c_exits_in_a_real_pseudo_terminal(tmp_path: Pa
     output = bytearray()
     try:
         deadline = time.monotonic() + 5
-        while b"prompt" not in output and time.monotonic() < deadline:
+        while b"idle" not in output and time.monotonic() < deadline:
             readable, _, _ = select.select([master], [], [], 0.1)
             if readable:
                 output.extend(os.read(master, 65536))
-        assert b"prompt" in output
+        assert b"idle" in output
 
         os.write(master, b"\x03")
         exit_deadline = time.monotonic() + 5
@@ -49,7 +49,8 @@ def test_cli_runs_inline_and_ctrl_c_exits_in_a_real_pseudo_terminal(tmp_path: Pa
             process.wait()
         os.close(master)
 
-    assert b"\x1b[?1049h" not in output
+    assert b"\x1b[?1049h" in output
+    assert b"\x1b[?1049l" in output
     assert b"\x1b[?1006h" in output
     assert b"\x1b[?1006l" in output
     assert (tmp_path / ".yolop" / "runtime.db").is_file()

@@ -17,6 +17,7 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models import KnownModelName, Model
 from pydantic_ai.run import EnqueueContent
+from rich.console import RenderableType
 from yolop_session import (
     ExecutionPin,
     RuntimeSessionSnapshot,
@@ -28,14 +29,24 @@ from yolop_session import (
 
 from yolop import Yolop
 
-from .completion import TuiCompleter
 from .files import FileReferenceError, prepare_prompt
 from .rendering import Transcript
 from .selection import SelectionOption
-from .terminal import InlineTerminal
+from .textual_app import TextualTerminal
 
 _LOGGER = logging.getLogger(__name__)
 _SESSION_LOCK_TIMEOUT = 30.0
+_TERMINAL_FACTORY = TextualTerminal
+
+
+def _render_rich_transcript(
+    transcript: Transcript,
+    _terminal: TextualTerminal,
+) -> RenderableType:
+    return transcript.renderable()
+
+
+_TRANSCRIPT_RENDERER = _render_rich_transcript
 _HELP_TEXT = (
     "Commands: /new  /resume  /help  /quit\n"
     "Scroll: PageUp/PageDown or mouse wheel · End: newest output"
@@ -66,10 +77,10 @@ async def run_tui[DepsT](
     transcript = Transcript.from_messages(session.messages)
     submissions: asyncio.Queue[str] = asyncio.Queue()
     active_turn: _ActiveTurn | None = None
-    terminal: InlineTerminal
+    terminal: TextualTerminal
 
     def render_transcript() -> None:
-        terminal.set_transcript(transcript.render(terminal.width))
+        terminal.set_transcript(_TRANSCRIPT_RENDERER(transcript, terminal))
 
     def refresh_status() -> None:
         input_tokens, output_tokens = _session_usage(session.messages)
@@ -116,12 +127,12 @@ async def run_tui[DepsT](
         transcript.toggle_thinking()
         render_transcript()
 
-    terminal = InlineTerminal(
+    terminal = _TERMINAL_FACTORY(
         on_submit=submit,
         on_cancel=cancel,
         on_toggle_tools=toggle_tools,
         on_toggle_thinking=toggle_thinking,
-        completer=TuiCompleter(working_directory),
+        cwd=working_directory,
     )
     render_transcript()
     refresh_status()
@@ -229,7 +240,7 @@ async def _run_turn[DepsT](
     deps: DepsT,
     deps_type: type[DepsT],
     model: Model | KnownModelName | str | None,
-    terminal: InlineTerminal,
+    terminal: TextualTerminal,
     transcript: Transcript,
     cwd: Path,
     set_active: Callable[["_ActiveTurn | None"], None],
@@ -401,7 +412,7 @@ class _ActiveTurn:
         context: RunContext[Any],
         *,
         cwd: Path,
-        terminal: InlineTerminal,
+        terminal: TextualTerminal,
         transcript: Transcript,
         render_transcript: Callable[[], None],
         on_change: Callable[[], None],

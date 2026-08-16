@@ -2,9 +2,6 @@ from importlib.metadata import requires
 from pathlib import Path
 
 import pytest
-from prompt_toolkit.application import create_app_session
-from prompt_toolkit.input.defaults import create_pipe_input
-from prompt_toolkit.output import DummyOutput
 from pydantic_ai import AgentSpec
 from yolop_tui import __file__ as package_file
 from yolop_tui.cli import main
@@ -67,12 +64,13 @@ def test_cli_injects_the_current_directory_as_workspace(tmp_path, monkeypatch) -
 def test_cli_starts_bundled_workspace_agent_with_project_sqlite_default(
     tmp_path, monkeypatch
 ) -> None:
-    monkeypatch.chdir(tmp_path)
+    async def exit_immediately(_spec, **_kwargs) -> None:
+        return None
 
-    with create_pipe_input() as pipe_input:
-        pipe_input.send_text("/quit\r")
-        with create_app_session(input=pipe_input, output=DummyOutput()):
-            main([])
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("yolop_tui.cli.run_tui", exit_immediately)
+
+    main([])
 
     assert (tmp_path / ".yolop" / "runtime.db").is_file()
 

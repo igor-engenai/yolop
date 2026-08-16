@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 from collections.abc import Callable
 from pathlib import Path
@@ -5,7 +7,7 @@ from pathlib import Path
 from rich.console import RenderableType
 from rich.text import Text
 from textual import events
-from textual.app import App, ComposeResult
+from textual.app import App, AutopilotCallbackType, ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
 from textual.screen import ModalScreen
@@ -420,8 +422,10 @@ class TextualTerminal:
         on_toggle_tools: Callable[[], None] | None = None,
         on_toggle_thinking: Callable[[], None] | None = None,
         cwd: Path | None = None,
+        auto_pilot: AutopilotCallbackType | None = None,
     ) -> None:
         self._ready = asyncio.Event()
+        self._auto_pilot = auto_pilot
         self.app = _YolopTextualApp(
             on_submit=on_submit,
             on_cancel=on_cancel or (lambda: None),
@@ -432,7 +436,10 @@ class TextualTerminal:
         )
 
     async def run(self) -> None:
-        await self.app.run_async()
+        await self.app.run_async(
+            headless=self._auto_pilot is not None,
+            auto_pilot=self._auto_pilot,
+        )
 
     async def wait_until_ready(self) -> None:
         await self._ready.wait()
