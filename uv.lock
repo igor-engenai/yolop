@@ -940,12 +940,13 @@ name = "yolop"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "pydantic-ai-slim", extra = ["openai", "spec"] },
+    { name = "pydantic-ai-slim", extra = ["spec"] },
     { name = "pyyaml" },
 ]
 
 [package.dev-dependencies]
 dev = [
+    { name = "pydantic-ai-slim", extra = ["openai"] },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "ruff" },
@@ -955,12 +956,13 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "pydantic-ai-slim", extras = ["openai", "spec"], specifier = ">=2.31.0" },
+    { name = "pydantic-ai-slim", extras = ["spec"], specifier = ">=2.31.0" },
     { name = "pyyaml", specifier = ">=6.0.3" },
 ]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "pydantic-ai-slim", extras = ["openai"], specifier = ">=2.31.0" },
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "pytest-asyncio", specifier = ">=1.4.0" },
     { name = "ruff", specifier = ">=0.16.3" },

@@ -3,7 +3,11 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from yolop import Yolop, coding_agent_spec
+from pydantic_ai import AgentSpec
+
+from yolop import Yolop
+
+SPEC_PATH = Path(__file__).with_name("agents") / "coding.yaml"
 
 
 @dataclass(frozen=True)
@@ -15,7 +19,7 @@ async def main() -> None:
     if not os.getenv("OPENAI_API_KEY"):
         raise SystemExit("Set OPENAI_API_KEY before running this example.")
 
-    spec = coding_agent_spec()
+    spec = AgentSpec.from_file(SPEC_PATH)
     deps = HostDeps(workspace=Path.cwd())
 
     async with Yolop().run(

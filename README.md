@@ -2,7 +2,7 @@
 
 YoloP is a small runtime for agents defined with Pydantic AI `AgentSpec`.
 
-The kernel is stateless. Pydantic AI owns the model and tool loop. AgentSpec selects installed capability code. Hosts own dependencies, history, persistence, and transport.
+The core is stateless. Pydantic AI owns the model and tool loop. AgentSpec selects installed capability code. Hosts own AgentSpec files, dependencies, history, persistence, and transport.
 
 ## Try the coding AgentSpec
 
@@ -12,9 +12,9 @@ export OPENAI_API_KEY="your-key"
 uv run python examples/coding_agent.py
 ```
 
-The example loads [`yolop/agent_specs/coding.yaml`](yolop/agent_specs/coding.yaml). This file is an exact Pydantic AI `AgentSpec`. It contains the model, description, instructions, model settings, and capability configuration.
+The example loads [`examples/agents/coding.yaml`](examples/agents/coding.yaml) directly with Pydantic AI. The AgentSpec lives outside the YoloP core package. It contains the model, description, instructions, model settings, and capability configuration.
 
-The coding AgentSpec enables:
+The coding AgentSpec selects:
 
 - `Workspace` file tools;
 - an allowlisted workspace shell;
@@ -43,6 +43,30 @@ messages = run.all_messages()
 
 YoloP returns Pydantic AI's native `AgentRunEvents` handle. It does not wrap events, results, messages, or dependencies.
 
+## Packages
+
+### `yolop`
+
+The core package contains:
+
+- the stateless runtime;
+- AgentSpec-based capability discovery;
+- the generic Skills capability and bundled default skills.
+
+It does not contain agent-specific AgentSpec files, Workspace code, model providers, or `pydantic-ai-harness`.
+
+### `yolop-workspace`
+
+[`packages/yolop-workspace`](packages/yolop-workspace) is a separate first-party capability plugin. It owns:
+
+- the `Workspace` capability;
+- the `pydantic-ai-harness` dependency;
+- filesystem and shell composition;
+- host workspace dependency requirements;
+- shell credential filtering.
+
+The shell command allowlist is agent policy. It is explicit in the external coding AgentSpec, not a Python default.
+
 ## Agent configuration and code
 
 AgentSpec contains declarative agent data:
@@ -55,6 +79,6 @@ AgentSpec contains declarative agent data:
 
 Capability implementations and tools are installed Python code. YoloP resolves custom capability names through the `yolop.capabilities` entry-point group and imports only selected providers.
 
-The coding and research examples in [`pydantic-ai-harness`](https://github.com/pydantic/pydantic-ai-harness/tree/v0.21.0/examples) are composition references. YoloP reuses harness capabilities such as `FileSystem` and `Shell`, but YoloP agents remain AgentSpec data. It does not copy the Python `build_agent()` factory pattern.
+The coding and research examples in [`pydantic-ai-harness`](https://github.com/pydantic/pydantic-ai-harness/tree/v0.21.0/examples) are composition references. YoloP uses harness code through optional capability plugins, but agents remain external AgentSpec data. It does not copy the Python `build_agent()` factory pattern.
 
 Changing prompts, inline skills, or capability arguments creates a new AgentSpec and needs no code release. Changing capability code or bundled skill files requires a package deployment. Bundled skills are available but inactive until AgentSpec enables them.

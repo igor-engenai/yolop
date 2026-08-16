@@ -7,7 +7,9 @@ from pydantic_ai import AgentRunResultEvent, AgentSpec
 from pydantic_ai.messages import ModelMessage, ModelRequest, ToolReturnPart
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, DeltaToolCalls, FunctionModel
 
-from yolop import Yolop, coding_agent_spec
+from yolop import Yolop
+
+SPEC_PATH = Path(__file__).parents[1] / "examples" / "agents" / "coding.yaml"
 
 
 @dataclass(frozen=True)
@@ -16,7 +18,7 @@ class HostDeps:
 
 
 async def test_coding_agentspec_composes_workspace_shell_and_skills(tmp_path: Path) -> None:
-    spec = coding_agent_spec()
+    spec = AgentSpec.from_file(SPEC_PATH)
 
     assert isinstance(spec, AgentSpec)
     assert spec.model == "openai:gpt-5.6-luna"
