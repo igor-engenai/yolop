@@ -6,10 +6,28 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
+from filelock import FileLock
+from pydantic import ValidationError
 from pydantic_ai.messages import ModelMessage, ModelMessagesTypeAdapter
 from pydantic_core import from_json, to_json
+
+
+class InvalidSessionIdError(ValueError):
+    """A session ID is not a generated UUID4."""
+
+
+class SessionConflictError(RuntimeError):
+    """The stored session does not match the expected revision."""
+
+
+class SessionFormatError(ValueError):
+    """A stored session does not contain valid ModelMessage JSONL."""
+
+
+class SessionNotFoundError(LookupError):
+    """A generated session ID does not exist in this workspace."""
 
 
 @dataclass(frozen=True)
@@ -38,6 +56,10 @@ class WorkspaceSessionStore:
     async def load(self, session_id: str) -> SessionSnapshot:
         """Load one session and its content revision."""
         return await asyncio.to_thread(self._load, session_id)
+
+    async def delete(self, session_id: str, *, expected_revision: str) -> None:
+        """Delete a session if its revision is current."""
+        await asyncio.to_thread(self._delete, session_id, expected_revision)
 
     async def replace(
         self,
@@ -68,10 +90,23 @@ class WorkspaceSessionStore:
             return []
         return sorted(path.stem for path in self._directory.glob("*.jsonl"))
 
+    def _delete(self, session_id: str, expected_revision: str) -> None:
+        with FileLock(self._lock_path(session_id)):
+            content = self._read(session_id)
+            if _revision(content) != expected_revision:
+                raise SessionConflictError(f"Session {session_id!r} has changed")
+            self._path(session_id).unlink()
+
     def _load(self, session_id: str) -> SessionSnapshot:
-        content = self._path(session_id).read_bytes()
-        raw_messages = [from_json(line) for line in content.splitlines()]
-        messages = ModelMessagesTypeAdapter.validate_python(raw_messages)
+        content = self._read(session_id)
+        messages: list[ModelMessage] = []
+        for line_number, line in enumerate(content.splitlines(), start=1):
+            try:
+                messages.extend(ModelMessagesTypeAdapter.validate_python([from_json(line)]))
+            except (ValueError, ValidationError) as error:
+                raise SessionFormatError(
+                    f"Session {session_id!r} has invalid JSONL at line {line_number}"
+                ) from error
         return SessionSnapshot(
             id=session_id,
             messages=messages,
@@ -84,30 +119,48 @@ class WorkspaceSessionStore:
         expected_revision: str,
         messages: Sequence[ModelMessage],
     ) -> SessionSnapshot:
-        path = self._path(session_id)
-        current = path.read_bytes()
-        if _revision(current) != expected_revision:
-            raise ValueError(f"Session {session_id!r} has changed")
+        with FileLock(self._lock_path(session_id)):
+            path = self._path(session_id)
+            current = self._read(session_id)
+            if _revision(current) != expected_revision:
+                raise SessionConflictError(f"Session {session_id!r} has changed")
 
-        json_messages = ModelMessagesTypeAdapter.dump_python(list(messages), mode="json")
-        content = b"".join(to_json(message) + b"\n" for message in json_messages)
-        temporary = self._directory / f".{session_id}.{uuid4().hex}.tmp"
+            json_messages = ModelMessagesTypeAdapter.dump_python(list(messages), mode="json")
+            content = b"".join(to_json(message) + b"\n" for message in json_messages)
+            temporary = self._directory / f".{session_id}.{uuid4().hex}.tmp"
+            try:
+                with temporary.open("xb") as file:
+                    file.write(content)
+                    file.flush()
+                    os.fsync(file.fileno())
+                os.replace(temporary, path)
+            finally:
+                temporary.unlink(missing_ok=True)
+
+            return SessionSnapshot(
+                id=session_id,
+                messages=list(messages),
+                revision=_revision(content),
+            )
+
+    def _lock_path(self, session_id: str) -> Path:
+        return self._path(session_id).with_suffix(".lock")
+
+    def _read(self, session_id: str) -> bytes:
         try:
-            with temporary.open("xb") as file:
-                file.write(content)
-                file.flush()
-                os.fsync(file.fileno())
-            os.replace(temporary, path)
-        finally:
-            temporary.unlink(missing_ok=True)
-
-        return SessionSnapshot(
-            id=session_id,
-            messages=list(messages),
-            revision=_revision(content),
-        )
+            return self._path(session_id).read_bytes()
+        except FileNotFoundError as error:
+            raise SessionNotFoundError(f"Session {session_id!r} does not exist") from error
 
     def _path(self, session_id: str) -> Path:
+        try:
+            parsed = UUID(session_id)
+        except (AttributeError, TypeError, ValueError) as error:
+            raise InvalidSessionIdError(
+                f"Session ID {session_id!r} is not a generated UUID4"
+            ) from error
+        if parsed.version != 4 or str(parsed) != session_id:
+            raise InvalidSessionIdError(f"Session ID {session_id!r} is not a generated UUID4")
         return self._directory / f"{session_id}.jsonl"
 
 
@@ -115,4 +168,11 @@ def _revision(content: bytes) -> str:
     return sha256(content).hexdigest()
 
 
-__all__ = ["SessionSnapshot", "WorkspaceSessionStore"]
+__all__ = [
+    "InvalidSessionIdError",
+    "SessionConflictError",
+    "SessionFormatError",
+    "SessionNotFoundError",
+    "SessionSnapshot",
+    "WorkspaceSessionStore",
+]

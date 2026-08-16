@@ -190,6 +190,15 @@ wheels = [
 ]
 
 [[package]]
+name = "filelock"
+version = "3.32.3"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/7d/64/a02e6765de08964ed371eca577870593245afc9dfac16d037de7c10d18e6/filelock-3.32.3.tar.gz", hash = "sha256:0ffa185a3540854c95caa7fa76b76cb219d907415e2c5dc9af25fd970563487f", size = 218135, upload-time = "2026-08-13T16:00:05.577Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a7/8e/50f46a9c0ce8d2861a394c1347caae037ea0431d2f67d7feb151cbc4649a/filelock-3.32.3-py3-none-any.whl", hash = "sha256:7f0ca4bcc0e181c60dbbd8aa9ab5b120ebb99e4e064e83636340056f833a1f09", size = 98901, upload-time = "2026-08-13T16:00:03.974Z" },
+]
+
+[[package]]
 name = "genai-prices"
 version = "0.1.3"
 source = { registry = "https://pypi.org/simple" }
@@ -993,8 +1002,12 @@ name = "yolop-workspace-session"
 version = "0.1.0"
 source = { editable = "packages/yolop-workspace-session" }
 dependencies = [
+    { name = "filelock" },
     { name = "pydantic-ai-slim" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "pydantic-ai-slim", specifier = ">=2.31.0" }]
+requires-dist = [
+    { name = "filelock", specifier = ">=3.20.0" },
+    { name = "pydantic-ai-slim", specifier = ">=2.31.0" },
+]

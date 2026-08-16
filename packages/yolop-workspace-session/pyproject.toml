@@ -7,7 +7,10 @@ name = "yolop-workspace-session"
 version = "0.1.0"
 description = "Workspace JSONL session persistence for YoloP hosts"
 requires-python = ">=3.12"
-dependencies = ["pydantic-ai-slim>=2.31.0"]
+dependencies = [
+    "filelock>=3.20.0",
+    "pydantic-ai-slim>=2.31.0",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["yolop_workspace_session"]
