@@ -2,6 +2,12 @@ version = 1
 revision = 3
 requires-python = ">=3.12"
 
+[manifest]
+members = [
+    "yolop",
+    "yolop-workspace",
+]
+
 [[package]]
 name = "annotated-types"
 version = "0.8.0"
@@ -934,7 +940,6 @@ name = "yolop"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "pydantic-ai-harness" },
     { name = "pydantic-ai-slim", extra = ["openai", "spec"] },
     { name = "pyyaml" },
 ]
@@ -945,11 +950,11 @@ dev = [
     { name = "pytest-asyncio" },
     { name = "ruff" },
     { name = "ty" },
+    { name = "yolop-workspace" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "pydantic-ai-harness", specifier = ">=0.21.0,<0.22" },
     { name = "pydantic-ai-slim", extras = ["openai", "spec"], specifier = ">=2.31.0" },
     { name = "pyyaml", specifier = ">=6.0.3" },
 ]
@@ -960,4 +965,20 @@ dev = [
     { name = "pytest-asyncio", specifier = ">=1.4.0" },
     { name = "ruff", specifier = ">=0.16.3" },
     { name = "ty", specifier = ">=0.0.72" },
+    { name = "yolop-workspace", editable = "packages/yolop-workspace" },
+]
+
+[[package]]
+name = "yolop-workspace"
+version = "0.1.0"
+source = { editable = "packages/yolop-workspace" }
+dependencies = [
+    { name = "pydantic-ai-harness" },
+    { name = "pydantic-ai-slim" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "pydantic-ai-harness", specifier = ">=0.21.0,<0.22" },
+    { name = "pydantic-ai-slim", specifier = ">=2.31.0" },
 ]

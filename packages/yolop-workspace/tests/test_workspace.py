@@ -7,7 +7,7 @@ from typing import Any
 from pydantic_ai import AgentRunResultEvent
 from pydantic_ai.messages import ModelMessage, ModelRequest, ToolReturnPart
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, DeltaToolCalls, FunctionModel
-from pytest import MonkeyPatch
+from pytest import MonkeyPatch, raises
 
 from yolop import Yolop
 
@@ -15,6 +15,23 @@ from yolop import Yolop
 @dataclass(frozen=True)
 class HostDeps:
     workspace: Path
+
+
+def test_workspace_shell_requires_an_explicit_command_allowlist(tmp_path: Path) -> None:
+    with raises(ValueError, match="shell requires a non-empty allowed_commands list"):
+        Yolop().run(
+            {"capabilities": [{"Workspace": {"shell": True}}]},
+            "Run a command.",
+            model=FunctionModel(stream_function=_unused_stream),
+            deps=HostDeps(workspace=tmp_path),
+            deps_type=HostDeps,
+        )
+
+
+async def _unused_stream(
+    _messages: list[ModelMessage], _info: AgentInfo
+) -> AsyncIterator[str | DeltaToolCalls]:
+    yield "unused"
 
 
 async def test_workspace_does_not_enable_shell_by_default(tmp_path: Path) -> None:

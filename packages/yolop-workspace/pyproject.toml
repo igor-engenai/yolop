@@ -1,0 +1,19 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "yolop-workspace"
+version = "0.1.0"
+description = "Host-resolved workspace capability for YoloP"
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic-ai-harness>=0.21.0,<0.22",
+    "pydantic-ai-slim>=2.31.0",
+]
+
+[project.entry-points."yolop.capabilities"]
+Workspace = "yolop_workspace:Workspace"
+
+[tool.hatch.build.targets.wheel]
+packages = ["yolop_workspace"]

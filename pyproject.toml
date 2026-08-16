@@ -9,14 +9,12 @@ description = "A small Pydantic AI runtime"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "pydantic-ai-harness>=0.21.0,<0.22",
     "pydantic-ai-slim[openai,spec]>=2.31.0",
     "pyyaml>=6.0.3",
 ]
 
 [project.entry-points."yolop.capabilities"]
 Skills = "yolop.skills:Skills"
-Workspace = "yolop.workspace:Workspace"
 
 [dependency-groups]
 dev = [
@@ -24,15 +22,22 @@ dev = [
     "pytest-asyncio>=1.4.0",
     "ruff>=0.16.3",
     "ty>=0.0.72",
+    "yolop-workspace",
 ]
 
 [tool.uv]
 package = true
 
+[tool.uv.sources]
+yolop-workspace = { workspace = true }
+
+[tool.uv.workspace]
+members = ["packages/yolop-workspace"]
+
 [tool.pytest.ini_options]
 addopts = "-q"
 asyncio_mode = "auto"
-testpaths = ["tests"]
+testpaths = ["tests", "packages/yolop-workspace/tests"]
 
 [tool.ruff]
 line-length = 100
@@ -45,4 +50,4 @@ select = ["E", "F", "I", "UP"]
 python-version = "3.12"
 
 [tool.ty.src]
-include = ["yolop", "tests", "examples"]
+include = ["yolop", "tests", "examples", "packages"]

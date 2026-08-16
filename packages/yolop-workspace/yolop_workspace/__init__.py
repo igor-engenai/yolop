@@ -10,24 +10,6 @@ from pydantic_ai_harness import LLM_API_KEY_ENV_PATTERNS, FileSystem, Shell
 
 _DENIED_ENV_PATTERNS = (*LLM_API_KEY_ENV_PATTERNS, "AZURE_OPENAI_*")
 
-DEFAULT_ALLOWED_COMMANDS: tuple[str, ...] = (
-    "git",
-    "rg",
-    "grep",
-    "find",
-    "ls",
-    "cat",
-    "sed",
-    "head",
-    "tail",
-    "python",
-    "uv",
-    "pytest",
-    "ruff",
-    "ty",
-    "just",
-)
-
 
 class WorkspaceDeps(Protocol):
     """Host dependencies required by the Workspace capability."""
@@ -42,11 +24,13 @@ class Workspace(AbstractCapability[Any]):
 
     read_only: bool = False
     shell: bool = False
-    allowed_commands: Sequence[str] = DEFAULT_ALLOWED_COMMANDS
+    allowed_commands: Sequence[str] = ()
 
     def __post_init__(self) -> None:
         if self.read_only and self.shell:
             raise ValueError("A read-only workspace cannot enable shell commands")
+        if self.shell and not self.allowed_commands:
+            raise ValueError("shell requires a non-empty allowed_commands list")
 
     async def for_run(self, ctx: RunContext[Any]) -> AbstractCapability[Any]:
         root = _workspace_root(ctx.deps)
