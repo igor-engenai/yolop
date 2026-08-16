@@ -23,7 +23,7 @@ from pydantic_ai.messages import (
     UserContent,
     UserPromptPart,
 )
-from rich.console import Console
+from rich.console import Console, Group, RenderableType
 from rich.markdown import Markdown
 from rich.text import Text
 
@@ -120,6 +120,31 @@ class Transcript:
     def toggle_thinking(self) -> None:
         self.show_thinking = not self.show_thinking
 
+    def renderable(self) -> Group:
+        """Build a native Rich projection for managed terminal hosts."""
+        renderables: list[RenderableType] = []
+        for entry in self._visible_entries():
+            if renderables:
+                renderables.append(Text(""))
+            if isinstance(entry, _ToolEntry):
+                renderables.append(self._tool_renderable(entry))
+            elif entry.role == "user":
+                renderables.append(Text(f"› {entry.text}", style="cyan"))
+            elif entry.role == "assistant":
+                renderables.append(Markdown(entry.text))
+            elif entry.role == "thinking":
+                renderables.append(
+                    Group(
+                        Text("thinking", style="dim"),
+                        Text(entry.text, style="dim", overflow="fold"),
+                    )
+                )
+            elif entry.role == "notice":
+                renderables.append(Text(entry.text, style="dim", overflow="fold"))
+            else:
+                renderables.append(Text(f"Error: {entry.text}", style="red", overflow="fold"))
+        return Group(*renderables)
+
     def render(self, width: int) -> ANSI:
         stream = StringIO()
         console = Console(
@@ -131,13 +156,7 @@ class Transcript:
             legacy_windows=False,
         )
         first = True
-        for entry in self._entries:
-            if (
-                isinstance(entry, _TextEntry)
-                and entry.role == "thinking"
-                and not self.show_thinking
-            ):
-                continue
+        for entry in self._visible_entries():
             if not first:
                 console.print()
             first = False
@@ -155,6 +174,17 @@ class Transcript:
             else:
                 console.print(Text(f"Error: {entry.text}", style="red"), overflow="fold")
         return ANSI(stream.getvalue().rstrip("\n"))
+
+    def _visible_entries(self) -> list[_TextEntry | _ToolEntry]:
+        return [
+            entry
+            for entry in self._entries
+            if not (
+                isinstance(entry, _TextEntry)
+                and entry.role == "thinking"
+                and not self.show_thinking
+            )
+        ]
 
     def _append_text(self, role: str, text: str) -> None:
         if self._entries and isinstance(self._entries[-1], _TextEntry):
@@ -185,7 +215,7 @@ class Transcript:
         tool.status = getattr(part, "outcome", "failed")
         tool.result = _value_text(part.content)
 
-    def _render_tool(self, console: Console, tool: _ToolEntry) -> None:
+    def _tool_renderable(self, tool: _ToolEntry) -> Group:
         color = {
             "running": "yellow",
             "success": "green",
@@ -198,9 +228,15 @@ class Transcript:
         row.append(f"  {tool.status}", style=color)
         if tool.arguments:
             row.append(f"  {_one_line(tool.arguments, 120)}", style="dim")
-        console.print(row, overflow="fold")
+        renderables: list[RenderableType] = [row]
         if self.show_tools and tool.result:
-            console.print(Text(f"    {_bounded_detail(tool.result)}", style="dim"), overflow="fold")
+            renderables.append(
+                Text(f"    {_bounded_detail(tool.result)}", style="dim", overflow="fold")
+            )
+        return Group(*renderables)
+
+    def _render_tool(self, console: Console, tool: _ToolEntry) -> None:
+        console.print(self._tool_renderable(tool))
 
 
 def _display_user_content(content: str | Sequence[UserContent]) -> str:
