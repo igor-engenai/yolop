@@ -22,6 +22,8 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models.function import (
     AgentInfo,
+    DeltaThinkingCalls,
+    DeltaThinkingPart,
     DeltaToolCall,
     DeltaToolCalls,
     FunctionModel,
@@ -108,8 +110,23 @@ async def test_tui_streams_a_turn_and_saves_exact_session_history(tmp_path: Path
                 )
             )
             await _wait_for_output(output, "╭─ prompt")
+            session_id = (await store.list_sessions("test"))[0]
+            await _wait_for_output(output, session_id[:8])
+            assert "test:model" in output.text
+            assert "↑0 ↓0 · idle" in output.text
             pipe_input.send_text("Hello\r")
             await _wait_for_output(output, "Hello from the model")
+            async with asyncio.timeout(1):
+                while not (await store.load_session("test", session_id)).messages:
+                    await asyncio.sleep(0)
+            saved_before_exit = await store.load_session("test", session_id)
+            response_before_exit = saved_before_exit.messages[-1]
+            assert isinstance(response_before_exit, ModelResponse)
+            await _wait_for_output(
+                output,
+                f"↑{response_before_exit.usage.input_tokens} "
+                f"↓{response_before_exit.usage.output_tokens} · idle",
+            )
             pipe_input.send_text("/quit\r")
             await asyncio.wait_for(running, timeout=1)
 
@@ -245,7 +262,7 @@ async def test_input_during_a_run_steers_the_same_native_agent_run(tmp_path: Pat
             pipe_input.send_text("Start\r")
             await _wait_for_output(output, "Initial work")
             pipe_input.send_text("Change direction\r")
-            await asyncio.sleep(0)
+            await _wait_for_output(output, "queued 1")
             release_first_response.set()
             await _wait_for_output(output, "Steered answer")
             pipe_input.send_text("/quit\r")
@@ -468,6 +485,7 @@ async def test_escape_cancels_an_active_tool_and_saves_interrupted_return(
             await _wait_for_output(output, "╭─ prompt")
             pipe_input.send_text("Use the tool\r")
             await asyncio.wait_for(deps.started.wait(), timeout=1)
+            await _wait_for_output(output, "wait_tool")
             pipe_input.send_bytes(b"\x1b")
             await asyncio.wait_for(deps.stopped.wait(), timeout=1)
             session_id = (await store.list_sessions("test"))[0]
@@ -476,6 +494,10 @@ async def test_escape_cancels_an_active_tool_and_saves_interrupted_return(
                     await asyncio.sleep(0)
             pipe_input.send_text("Continue\r")
             await _wait_for_output(output, "Tool finished")
+            detail = "The tool call was interrupted before a result was produced."
+            assert detail not in output.text
+            pipe_input.send_bytes(b"\x0f")
+            await _wait_for_output(output, detail)
             pipe_input.send_text("/quit\r")
             await asyncio.wait_for(running, timeout=1)
 
@@ -542,3 +564,37 @@ async def test_session_conflict_does_not_overwrite_external_history(tmp_path: Pa
             await asyncio.wait_for(running, timeout=1)
 
     assert (await store.load_session("test", session.id)).messages == external_messages
+
+
+async def test_thinking_is_hidden_until_ctrl_t(tmp_path: Path) -> None:
+    async def respond(
+        _messages: list[ModelMessage],
+        _info: AgentInfo,
+    ) -> AsyncIterator[str | DeltaThinkingCalls]:
+        yield {0: DeltaThinkingPart(content="private thought")}
+        yield "Visible answer"
+
+    output = CapturingOutput()
+    store = SQLiteRuntimeStore(tmp_path / "runtime.db")
+    with create_pipe_input() as pipe_input:
+        with create_app_session(input=pipe_input, output=output):
+            running = asyncio.create_task(
+                run_tui(
+                    AgentSpec(),
+                    store=store,
+                    namespace="test",
+                    deps=None,
+                    deps_type=type(None),
+                    model=FunctionModel(stream_function=respond),
+                    model_id="test:model",
+                    cwd=tmp_path,
+                )
+            )
+            await _wait_for_output(output, "╭─ prompt")
+            pipe_input.send_text("Think\r")
+            await _wait_for_output(output, "Visible answer")
+            assert "private thought" not in output.text
+            pipe_input.send_bytes(b"\x14")
+            await _wait_for_output(output, "private thought")
+            pipe_input.send_text("/quit\r")
+            await asyncio.wait_for(running, timeout=1)

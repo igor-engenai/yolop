@@ -5,10 +5,12 @@ from prompt_toolkit.application import Application
 from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.completion import Completer
 from prompt_toolkit.document import Document
+from prompt_toolkit.formatted_text import AnyFormattedText, fragment_list_to_text, to_formatted_text
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import HSplit, Layout, VSplit, Window
 from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl, UIContent, UIControl
 from prompt_toolkit.layout.dimension import Dimension
+from prompt_toolkit.styles import Style
 
 
 class InlineTerminal:
@@ -19,11 +21,17 @@ class InlineTerminal:
         *,
         on_submit: Callable[[str], None],
         on_cancel: Callable[[], None] | None = None,
+        on_toggle_tools: Callable[[], None] | None = None,
+        on_toggle_thinking: Callable[[], None] | None = None,
         completer: Completer | None = None,
     ) -> None:
         self._on_submit = on_submit
         self._on_cancel = on_cancel or (lambda: None)
-        self._transcript = ""
+        self._on_toggle_tools = on_toggle_tools or (lambda: None)
+        self._on_toggle_thinking = on_toggle_thinking or (lambda: None)
+        self._transcript: AnyFormattedText = ""
+        self._transcript_lines = 0
+        self._status = ""
         self._ready = asyncio.Event()
         self._buffer = Buffer(
             completer=completer,
@@ -39,8 +47,18 @@ class InlineTerminal:
     async def wait_until_ready(self) -> None:
         await self._ready.wait()
 
-    def set_transcript(self, text: str) -> None:
+    @property
+    def width(self) -> int:
+        return self._application.output.get_size().columns
+
+    def set_transcript(self, text: AnyFormattedText) -> None:
         self._transcript = text
+        plain = fragment_list_to_text(to_formatted_text(text))
+        self._transcript_lines = plain.count("\n") + bool(plain)
+        self._application.invalidate()
+
+    def set_status(self, text: str) -> None:
+        self._status = text
         self._application.invalidate()
 
     def restore_editor_text(self, text: str) -> None:
@@ -78,6 +96,14 @@ class InlineTerminal:
         def clear_editor(_event) -> None:
             self._buffer.reset()
 
+        @bindings.add("c-o")
+        def toggle_tools(_event) -> None:
+            self._on_toggle_tools()
+
+        @bindings.add("c-t")
+        def toggle_thinking(_event) -> None:
+            self._on_toggle_thinking()
+
         @bindings.add("c-d")
         def exit_when_empty(_event) -> None:
             if not self._buffer.text:
@@ -102,12 +128,23 @@ class InlineTerminal:
             ]
         )
         bottom_border = Window(content=_BorderControl(top=False), height=1)
+        status = Window(
+            content=FormattedTextControl(lambda: [("class:status", self._status)]),
+            height=1,
+            wrap_lines=False,
+        )
         application = Application(
             layout=Layout(
-                HSplit([transcript, top_border, editor_frame, bottom_border]),
+                HSplit([transcript, top_border, editor_frame, bottom_border, status]),
                 editor,
             ),
             key_bindings=bindings,
+            style=Style.from_dict(
+                {
+                    "border": "ansibrightblack",
+                    "status": "ansibrightblack",
+                }
+            ),
             full_screen=False,
             erase_when_done=False,
         )
@@ -116,9 +153,7 @@ class InlineTerminal:
         return application
 
     def _transcript_height(self) -> Dimension:
-        if not self._transcript:
-            return Dimension.exact(0)
-        return Dimension(preferred=self._transcript.count("\n") + 1)
+        return Dimension.exact(self._transcript_lines)
 
 
 class _BorderControl(UIControl):
@@ -131,4 +166,4 @@ class _BorderControl(UIControl):
             line = label + "─" * max(0, width - len(label) - 1) + "╮"
         else:
             line = "╰" + "─" * max(0, width - 2) + "╯"
-        return UIContent(get_line=lambda _index: [("", line[:width])], line_count=1)
+        return UIContent(get_line=lambda _index: [("class:border", line[:width])], line_count=1)

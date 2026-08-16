@@ -1,24 +1,13 @@
 import asyncio
 import logging
-from collections.abc import AsyncIterable, Callable, Sequence
+from collections.abc import AsyncIterable, Callable
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from pydantic_ai import AgentSpec, AgentStreamEvent, EnqueuedMessagesEvent, RunContext
 from pydantic_ai.exceptions import RunCancelled
-from pydantic_ai.messages import (
-    ModelMessage,
-    ModelRequest,
-    ModelResponse,
-    PartDeltaEvent,
-    PartStartEvent,
-    TextContent,
-    TextPart,
-    TextPartDelta,
-    UserContent,
-    UserPromptPart,
-)
+from pydantic_ai.messages import ModelMessage, ModelResponse, UserContent
 from pydantic_ai.models import KnownModelName, Model
 from pydantic_ai.run import EnqueueContent
 from yolop_session import (
@@ -32,6 +21,7 @@ from yolop_session import (
 from yolop import Yolop
 
 from .files import FileReferenceCompleter, FileReferenceError, prepare_prompt
+from .rendering import Transcript
 from .terminal import InlineTerminal
 
 _LOGGER = logging.getLogger(__name__)
@@ -59,9 +49,26 @@ async def run_tui[DepsT](
         else await store.create_session(namespace, pin=pin)
     )
     ensure_session_pin(session, pin)
-    transcript = _Transcript.from_messages(session.messages)
+    transcript = Transcript.from_messages(session.messages)
     submissions: asyncio.Queue[str] = asyncio.Queue()
     active_turn: _ActiveTurn | None = None
+    terminal: InlineTerminal
+
+    def render_transcript() -> None:
+        terminal.set_transcript(transcript.render(terminal.width))
+
+    def refresh_status() -> None:
+        input_tokens, output_tokens = _session_usage(session.messages)
+        state = active_turn.state if active_turn is not None else "idle"
+        queued = (
+            f" · queued {active_turn.pending_count}"
+            if active_turn is not None and active_turn.pending_count
+            else ""
+        )
+        terminal.set_status(
+            f"{_compact(working_directory.name, 14)} · {session.id[:8]} · "
+            f"{_compact(pin.model_id, 24)} · ↑{input_tokens} ↓{output_tokens} · {state}{queued}"
+        )
 
     def submit(text: str) -> None:
         if active_turn is None:
@@ -76,13 +83,25 @@ async def run_tui[DepsT](
     def set_active(turn: _ActiveTurn | None) -> None:
         nonlocal active_turn
         active_turn = turn
+        refresh_status()
+
+    def toggle_tools() -> None:
+        transcript.toggle_tools()
+        render_transcript()
+
+    def toggle_thinking() -> None:
+        transcript.toggle_thinking()
+        render_transcript()
 
     terminal = InlineTerminal(
         on_submit=submit,
         on_cancel=cancel,
+        on_toggle_tools=toggle_tools,
+        on_toggle_thinking=toggle_thinking,
         completer=FileReferenceCompleter(working_directory),
     )
-    terminal.set_transcript(transcript.render())
+    render_transcript()
+    refresh_status()
 
     async def control() -> None:
         nonlocal session
@@ -94,10 +113,10 @@ async def run_tui[DepsT](
                 prompt = prepare_prompt(text, cwd=working_directory)
             except FileReferenceError as error:
                 transcript.add_error(str(error))
-                terminal.set_transcript(transcript.render())
+                render_transcript()
                 continue
             transcript.add_user(text)
-            terminal.set_transcript(transcript.render())
+            render_transcript()
             try:
                 session = await _run_turn(
                     spec,
@@ -113,19 +132,24 @@ async def run_tui[DepsT](
                     transcript=transcript,
                     cwd=working_directory,
                     set_active=set_active,
+                    render_transcript=render_transcript,
+                    refresh_status=refresh_status,
                 )
+                refresh_status()
             except asyncio.CancelledError:
                 raise
             except SessionConflictError:
                 session = await store.load_session(namespace, session.id)
                 transcript.reset(session.messages)
                 transcript.add_error("Session changed; the local run was not saved")
-                terminal.set_transcript(transcript.render())
+                render_transcript()
+                refresh_status()
             except Exception:
                 _LOGGER.exception("YoloP terminal run failed for session %s", session.id)
                 transcript.reset(session.messages)
                 transcript.add_error("Agent run failed")
-                terminal.set_transcript(transcript.render())
+                render_transcript()
+                refresh_status()
 
     terminal_task = asyncio.create_task(terminal.run(), name="yolop-tui-terminal")
     control_task = asyncio.create_task(control(), name="yolop-tui-controller")
@@ -155,9 +179,11 @@ async def _run_turn[DepsT](
     deps_type: type[DepsT],
     model: Model | KnownModelName | str | None,
     terminal: InlineTerminal,
-    transcript: "_Transcript",
+    transcript: Transcript,
     cwd: Path,
     set_active: Callable[["_ActiveTurn | None"], None],
+    render_transcript: Callable[[], None],
+    refresh_status: Callable[[], None],
 ) -> RuntimeSessionSnapshot:
     async with store.lock_session(
         namespace,
@@ -181,6 +207,8 @@ async def _run_turn[DepsT](
                             cwd=cwd,
                             terminal=terminal,
                             transcript=transcript,
+                            render_transcript=render_transcript,
+                            on_change=refresh_status,
                         )
                         set_active(active)
                     else:
@@ -188,14 +216,8 @@ async def _run_turn[DepsT](
                     async for event in events:
                         if isinstance(event, EnqueuedMessagesEvent):
                             active.mark_delivered(event.enqueue_id)
-                        elif isinstance(event, PartStartEvent) and isinstance(event.part, TextPart):
-                            transcript.add_assistant(event.part.content)
-                            terminal.set_transcript(transcript.render())
-                        elif isinstance(event, PartDeltaEvent) and isinstance(
-                            event.delta, TextPartDelta
-                        ):
-                            transcript.add_assistant(event.delta.content_delta)
-                            terminal.set_transcript(transcript.render())
+                        elif transcript.apply(event):
+                            render_transcript()
 
                 result = await Yolop().execute(
                     spec,
@@ -220,7 +242,7 @@ async def _run_turn[DepsT](
                 active.restore_undelivered()
             set_active(None)
     transcript.reset(saved.messages)
-    terminal.set_transcript(transcript.render())
+    render_transcript()
     return saved
 
 
@@ -259,6 +281,20 @@ def _execution_pin(
     return ExecutionPin.from_spec(spec, model_id=resolved_id)
 
 
+def _compact(value: str, limit: int) -> str:
+    return value if len(value) <= limit else f"…{value[-(limit - 1) :]}"
+
+
+def _session_usage(messages: list[ModelMessage]) -> tuple[int, int]:
+    input_tokens = 0
+    output_tokens = 0
+    for message in messages:
+        if isinstance(message, ModelResponse):
+            input_tokens += message.usage.input_tokens or 0
+            output_tokens += message.usage.output_tokens or 0
+    return input_tokens, output_tokens
+
+
 class _ActiveTurn:
     def __init__(
         self,
@@ -266,20 +302,33 @@ class _ActiveTurn:
         *,
         cwd: Path,
         terminal: InlineTerminal,
-        transcript: "_Transcript",
+        transcript: Transcript,
+        render_transcript: Callable[[], None],
+        on_change: Callable[[], None],
     ) -> None:
         self._context = context
         self._cwd = cwd
         self._terminal = terminal
         self._transcript = transcript
+        self._render_transcript = render_transcript
+        self._on_change = on_change
         self._pending: dict[str, str] = {}
+        self._cancelling = False
+
+    @property
+    def pending_count(self) -> int:
+        return len(self._pending)
+
+    @property
+    def state(self) -> str:
+        return "cancelling" if self._cancelling else "running"
 
     def enqueue(self, text: str) -> None:
         try:
             prompt = prepare_prompt(text, cwd=self._cwd)
         except FileReferenceError as error:
             self._transcript.add_error(str(error))
-            self._terminal.set_transcript(self._transcript.render())
+            self._render_transcript()
             return
         content: tuple[EnqueueContent, ...] = (
             (prompt,) if isinstance(prompt, str) else tuple(prompt)
@@ -289,77 +338,22 @@ class _ActiveTurn:
             return
         self._pending[enqueue_id] = text
         self._transcript.add_user(text)
-        self._terminal.set_transcript(self._transcript.render())
+        self._render_transcript()
+        self._on_change()
 
     def set_context(self, context: RunContext[Any]) -> None:
         self._context = context
 
     def mark_delivered(self, enqueue_id: str) -> None:
         self._pending.pop(enqueue_id, None)
+        self._on_change()
 
     def cancel(self) -> None:
+        self._cancelling = True
+        self._on_change()
         self._context.cancel()
 
     def restore_undelivered(self) -> None:
         self._terminal.restore_editor_text("\n\n".join(self._pending.values()))
         self._pending.clear()
-
-
-class _Transcript:
-    def __init__(self) -> None:
-        self._entries: list[tuple[str, str]] = []
-
-    @classmethod
-    def from_messages(cls, messages: list[ModelMessage]) -> "_Transcript":
-        transcript = cls()
-        transcript.reset(messages)
-        return transcript
-
-    def reset(self, messages: list[ModelMessage]) -> None:
-        self._entries = []
-        for message in messages:
-            if isinstance(message, ModelRequest):
-                for part in message.parts:
-                    if isinstance(part, UserPromptPart):
-                        text = _display_user_content(part.content)
-                        if text:
-                            self._entries.append(("user", text))
-            elif isinstance(message, ModelResponse):
-                text = "".join(part.content for part in message.parts if isinstance(part, TextPart))
-                if text:
-                    self._entries.append(("assistant", text))
-
-    def add_user(self, text: str) -> None:
-        self._entries.append(("user", text))
-
-    def add_assistant(self, text: str) -> None:
-        if self._entries and self._entries[-1][0] == "assistant":
-            role, current = self._entries[-1]
-            self._entries[-1] = (role, current + text)
-        else:
-            self._entries.append(("assistant", text))
-
-    def add_error(self, text: str) -> None:
-        self._entries.append(("error", text))
-
-    def render(self) -> str:
-        blocks = []
-        for role, text in self._entries:
-            if role == "user":
-                blocks.append(f"› {text}")
-            elif role == "error":
-                blocks.append(f"Error: {text}")
-            else:
-                blocks.append(text)
-        return "\n\n".join(blocks)
-
-
-def _display_user_content(content: str | Sequence[UserContent]) -> str:
-    if isinstance(content, str):
-        return content
-    for item in content:
-        if isinstance(item, str):
-            return item
-        if isinstance(item, TextContent) and not item.content.startswith("<yolop-file "):
-            return item.content
-    return ""
+        self._on_change()
