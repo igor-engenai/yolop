@@ -1,0 +1,22 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv/
+
+# Agent and test state
+.agent-memory/
+.pi/
+.pytest_cache/
+.ruff_cache/
+
+# Local YoloP state
+.yolop/
+yolop.sqlite3
+yolop.sqlite3-*
+auth.json

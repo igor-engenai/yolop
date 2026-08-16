@@ -1,0 +1,16 @@
+model: openai:gpt-5.6-luna
+name: agentspec-demo
+description: Demonstrates prompts, model settings, bundled skills, and Core skills.
+instructions: |
+  Load both available skills before answering.
+model_settings:
+  thinking: minimal
+capabilities:
+  - Skills:
+      builtin:
+        - tdd
+      custom:
+        - name: company-python
+          description: Company Python conventions.
+          instructions: |
+            Use uv for environments, ruff for linting, and ty for type checking.
