@@ -24,6 +24,25 @@ The host supplies the workspace path through dependencies. AgentSpec cannot sele
 
 The API key is not part of AgentSpec. Pydantic AI reads `OPENAI_API_KEY` from the environment. An Azure AgentSpec can use `azure:<deployment-name>` with `AZURE_OPENAI_API_KEY` and `AZURE_OPENAI_ENDPOINT`. Legacy Azure endpoints also need `OPENAI_API_VERSION`.
 
+## Use workspace sessions
+
+Create a session:
+
+```bash
+uv run python examples/session_agent.py "Inspect this project"
+# session: 8c02a928-79b0-46de-8c38-11a5d416e1ca
+```
+
+Resume it with the generated ID:
+
+```bash
+uv run python examples/session_agent.py \
+  --session 8c02a928-79b0-46de-8c38-11a5d416e1ca \
+  "Continue the previous task"
+```
+
+The host explicitly loads and saves the session around `Yolop.run()`. Each session is stored at `.yolop/sessions/<session-id>.jsonl` in the current workspace. A save passes the loaded revision and atomically replaces the full history with `run.all_messages()`.
+
 ## Runtime API
 
 ```python
@@ -66,6 +85,12 @@ It does not contain agent-specific AgentSpec files, Workspace code, model provid
 - shell credential filtering.
 
 The shell command allowlist is agent policy. It is explicit in the external coding AgentSpec, not a Python default.
+
+### `yolop-workspace-session`
+
+[`packages/yolop-workspace-session`](packages/yolop-workspace-session) is a separate host persistence package. It provides multiple generated sessions with native Pydantic AI message JSONL, atomic full-history replacement, revision checks, and per-session write locks.
+
+It is not an AgentSpec capability. Hosts call it explicitly, and YoloP core does not depend on it.
 
 ## Agent configuration and code
 
