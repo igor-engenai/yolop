@@ -24,6 +24,7 @@ dev = [
     "ruff>=0.16.3",
     "ty>=0.0.72",
     "yolop-workspace",
+    "yolop-workspace-session",
 ]
 
 [tool.uv]
@@ -31,14 +32,19 @@ package = true
 
 [tool.uv.sources]
 yolop-workspace = { workspace = true }
+yolop-workspace-session = { workspace = true }
 
 [tool.uv.workspace]
-members = ["packages/yolop-workspace"]
+members = ["packages/yolop-workspace", "packages/yolop-workspace-session"]
 
 [tool.pytest.ini_options]
 addopts = "-q"
 asyncio_mode = "auto"
-testpaths = ["tests", "packages/yolop-workspace/tests"]
+testpaths = [
+    "tests",
+    "packages/yolop-workspace/tests",
+    "packages/yolop-workspace-session/tests",
+]
 
 [tool.ruff]
 line-length = 100

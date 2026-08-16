@@ -6,6 +6,7 @@ requires-python = ">=3.12"
 members = [
     "yolop",
     "yolop-workspace",
+    "yolop-workspace-session",
 ]
 
 [[package]]
@@ -952,6 +953,7 @@ dev = [
     { name = "ruff" },
     { name = "ty" },
     { name = "yolop-workspace" },
+    { name = "yolop-workspace-session" },
 ]
 
 [package.metadata]
@@ -968,6 +970,7 @@ dev = [
     { name = "ruff", specifier = ">=0.16.3" },
     { name = "ty", specifier = ">=0.0.72" },
     { name = "yolop-workspace", editable = "packages/yolop-workspace" },
+    { name = "yolop-workspace-session", editable = "packages/yolop-workspace-session" },
 ]
 
 [[package]]
@@ -984,3 +987,14 @@ requires-dist = [
     { name = "pydantic-ai-harness", specifier = ">=0.21.0,<0.22" },
     { name = "pydantic-ai-slim", specifier = ">=2.31.0" },
 ]
+
+[[package]]
+name = "yolop-workspace-session"
+version = "0.1.0"
+source = { editable = "packages/yolop-workspace-session" }
+dependencies = [
+    { name = "pydantic-ai-slim" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "pydantic-ai-slim", specifier = ">=2.31.0" }]
