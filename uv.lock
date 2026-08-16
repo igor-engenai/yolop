@@ -1132,12 +1132,14 @@ name = "yolop-sqlite-session"
 version = "0.1.0"
 source = { editable = "packages/yolop-sqlite-session" }
 dependencies = [
+    { name = "filelock" },
     { name = "pydantic-ai-slim" },
     { name = "yolop-session" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "filelock", specifier = ">=3.20.0" },
     { name = "pydantic-ai-slim", specifier = ">=2.31.0" },
     { name = "yolop-session", editable = "packages/yolop-session" },
 ]

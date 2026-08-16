@@ -67,6 +67,12 @@ class RunStateError(RuntimeError):
     code = "run_state_conflict"
 
 
+class RuntimeStoreSchemaError(RuntimeError):
+    """Stored runtime data uses an unsupported schema."""
+
+    code = "runtime_store_schema_mismatch"
+
+
 class SessionLockTimeoutError(TimeoutError):
     """A session lock could not be acquired before its deadline."""
 
@@ -367,6 +373,7 @@ __all__ = [
     "RuntimeRunSnapshot",
     "RuntimeSessionSnapshot",
     "RuntimeStore",
+    "RuntimeStoreSchemaError",
     "SessionConflictError",
     "SessionFormatError",
     "SessionLockTimeoutError",
