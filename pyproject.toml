@@ -25,6 +25,7 @@ dev = [
     "ty>=0.0.72",
     "yolop-duckdb",
     "yolop-session",
+    "yolop-sqlite-session",
     "yolop-workspace",
     "yolop-workspace-session",
 ]
@@ -35,6 +36,7 @@ package = true
 [tool.uv.sources]
 yolop-duckdb = { workspace = true }
 yolop-session = { workspace = true }
+yolop-sqlite-session = { workspace = true }
 yolop-workspace = { workspace = true }
 yolop-workspace-session = { workspace = true }
 
@@ -42,6 +44,7 @@ yolop-workspace-session = { workspace = true }
 members = [
     "packages/yolop-duckdb",
     "packages/yolop-session",
+    "packages/yolop-sqlite-session",
     "packages/yolop-workspace",
     "packages/yolop-workspace-session",
 ]
@@ -53,6 +56,7 @@ testpaths = [
     "tests",
     "packages/yolop-duckdb/tests",
     "packages/yolop-session/tests",
+    "packages/yolop-sqlite-session/tests",
     "packages/yolop-workspace/tests",
     "packages/yolop-workspace-session/tests",
 ]
