@@ -10,6 +10,7 @@ requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.116.0,<1",
     "pydantic-ai-slim>=2.31.0",
+    "sse-starlette>=3.0.0,<4",
     "yolop>=0.1.0",
     "yolop-session>=0.1.0",
 ]

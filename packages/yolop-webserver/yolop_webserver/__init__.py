@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -8,11 +9,12 @@ from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
-from pydantic import BaseModel, Field
-from pydantic_ai import AgentSpec
+from pydantic import BaseModel, Field, TypeAdapter
+from pydantic_ai import AgentRunResultEvent, AgentSpec, AgentStreamEvent
 from pydantic_ai.messages import ModelMessagesTypeAdapter
 from pydantic_ai.models import KnownModelName, Model
 from pydantic_ai.usage import RunUsage
+from sse_starlette import EventSourceResponse
 from yolop_session import (
     InvalidSessionIdError,
     SessionConflictError,
@@ -23,6 +25,9 @@ from yolop_session import (
 )
 
 from yolop import Yolop
+
+_LOGGER = logging.getLogger(__name__)
+_STREAM_EVENT_ADAPTER = TypeAdapter(AgentStreamEvent)
 
 
 class SessionReference(BaseModel):
@@ -136,6 +141,52 @@ def create_app[DepsT](
             usage=run.result.usage,
             session=_session_reference(saved),
         )
+
+    @app.post("/v1/sessions/{session_id}/runs/stream")
+    async def stream_agent(session_id: str, request: RunRequest) -> EventSourceResponse:
+        await session_store.load(session_id)
+
+        async def events() -> AsyncIterator[dict[str, str]]:
+            try:
+                async with locks.hold(session_id):
+                    session = await session_store.load(session_id)
+                    async with runtime.run(
+                        agent_spec,
+                        request.prompt,
+                        deps=deps,
+                        deps_type=deps_type,
+                        model=model,
+                        message_history=session.messages,
+                    ) as run:
+                        async for event in run:
+                            if isinstance(event, AgentRunResultEvent):
+                                continue
+                            yield {
+                                "event": event.event_kind,
+                                "data": _STREAM_EVENT_ADAPTER.dump_json(event).decode(),
+                            }
+                    assert run.result is not None
+                    saved = await session_store.replace(
+                        session_id,
+                        expected_revision=session.revision,
+                        messages=run.all_messages(),
+                    )
+                completion = RunResponse(
+                    output=run.result.output,
+                    usage=run.result.usage,
+                    session=_session_reference(saved),
+                )
+                yield {"event": "run_completed", "data": completion.model_dump_json()}
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _LOGGER.exception("YoloP streaming run failed for session %s", session_id)
+                yield {
+                    "event": "run_error",
+                    "data": '{"detail":"Agent run failed"}',
+                }
+
+        return EventSourceResponse(events())
 
     return app
 

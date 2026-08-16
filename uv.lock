@@ -881,6 +881,19 @@ wheels = [
 ]
 
 [[package]]
+name = "sse-starlette"
+version = "3.4.8"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "starlette" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f8/00/b42a44342a054d58cb1115d7c8aa9cb4290dd9442f9c1b91a4b8173dba22/sse_starlette-3.4.8.tar.gz", hash = "sha256:ed89ffbb75cbf78a5fe2f2109cd584792ee7f9dfac96f791db546df8f15f3f9c", size = 32548, upload-time = "2026-08-05T11:19:49.982Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/dd/3a/764912c58293d95b6dcdf4cc255f9d10de310580ced547b082eb9d72018c/sse_starlette-3.4.8-py3-none-any.whl", hash = "sha256:6e82314c786709a3cd9520f2285cf9fff90e181e598e8a357b0cf80f66afba0d", size = 16516, upload-time = "2026-08-05T11:19:48.748Z" },
+]
+
+[[package]]
 name = "starlette"
 version = "1.6.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1111,6 +1124,7 @@ source = { editable = "packages/yolop-webserver" }
 dependencies = [
     { name = "fastapi" },
     { name = "pydantic-ai-slim" },
+    { name = "sse-starlette" },
     { name = "yolop" },
     { name = "yolop-session" },
 ]
@@ -1119,6 +1133,7 @@ dependencies = [
 requires-dist = [
     { name = "fastapi", specifier = ">=0.116.0,<1" },
     { name = "pydantic-ai-slim", specifier = ">=2.31.0" },
+    { name = "sse-starlette", specifier = ">=3.0.0,<4" },
     { name = "yolop", editable = "." },
     { name = "yolop-session", editable = "packages/yolop-session" },
 ]
