@@ -55,6 +55,12 @@ class IdempotencyConflictError(RuntimeError):
     code = "idempotency_conflict"
 
 
+class RunAdmissionError(RuntimeError):
+    """A bounded run queue cannot accept more work."""
+
+    code = "run_queue_full"
+
+
 class RunNotFoundError(LookupError):
     """A run ID does not exist in the selected namespace."""
 
@@ -209,6 +215,7 @@ class RuntimeStore(Protocol):
         *,
         idempotency_key: str,
         prompt: str,
+        max_pending: int | None = None,
     ) -> RunReservation: ...
 
     async def load_run(self, namespace: str, run_id: str) -> RuntimeRunSnapshot: ...
@@ -365,6 +372,7 @@ __all__ = [
     "IdempotencyConflictError",
     "InvalidNamespaceError",
     "InvalidSessionIdError",
+    "RunAdmissionError",
     "RunCompletion",
     "RunNotFoundError",
     "RunReservation",

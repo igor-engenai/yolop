@@ -19,6 +19,7 @@ from pydantic_core import from_json, to_json
 from yolop_session import (
     ExecutionPin,
     IdempotencyConflictError,
+    RunAdmissionError,
     RunCompletion,
     RunNotFoundError,
     RunReservation,
@@ -282,6 +283,7 @@ class SQLiteRuntimeStore:
         *,
         idempotency_key: str,
         prompt: str,
+        max_pending: int | None = None,
     ) -> RunReservation:
         return await asyncio.to_thread(
             self._reserve_run,
@@ -289,6 +291,7 @@ class SQLiteRuntimeStore:
             session_id,
             idempotency_key,
             prompt,
+            max_pending,
         )
 
     async def load_run(self, namespace: str, run_id: str) -> RuntimeRunSnapshot:
@@ -498,6 +501,7 @@ class SQLiteRuntimeStore:
         session_id: str,
         idempotency_key: str,
         prompt: str,
+        max_pending: int | None,
     ) -> RunReservation:
         validated_namespace = validate_namespace(namespace)
         validated_id = validate_session_id(session_id)
@@ -526,6 +530,27 @@ class SQLiteRuntimeStore:
                         f"Idempotency key {idempotency_key!r} has different input"
                     )
                 return RunReservation(run=run, created=False)
+
+            if max_pending is not None:
+                if max_pending < 1:
+                    raise ValueError("Maximum pending runs must be positive")
+                pending_row = connection.execute(
+                    """
+                    SELECT COUNT(*) FROM runtime_runs
+                    WHERE namespace = ? AND session_id = ? AND status IN (?, ?)
+                    """,
+                    (
+                        validated_namespace,
+                        validated_id,
+                        RunStatus.ACCEPTED,
+                        RunStatus.RUNNING,
+                    ),
+                ).fetchone()
+                assert pending_row is not None
+                if pending_row[0] >= max_pending:
+                    raise RunAdmissionError(
+                        f"Session {session_id!r} already has {max_pending} pending runs"
+                    )
 
             run_id = new_session_id()
             connection.execute(

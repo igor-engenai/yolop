@@ -7,6 +7,7 @@ from pytest import raises
 from yolop_session import (
     ExecutionPin,
     IdempotencyConflictError,
+    RunAdmissionError,
     RunStateError,
     RunStatus,
     SessionConflictError,
@@ -59,6 +60,45 @@ async def test_idempotency_key_rejects_different_input(tmp_path) -> None:
         )
 
     assert raised.value.code == "idempotency_conflict"
+
+
+async def test_run_reservation_enforces_a_per_session_limit(tmp_path) -> None:
+    store = SQLiteRuntimeStore(tmp_path / "runtime.db")
+    pin = ExecutionPin(agent_spec_id="a" * 64, model_id="openai:model")
+    session = await store.create_session("tenant/acme", pin=pin)
+    first = await store.reserve_run(
+        "tenant/acme",
+        session.id,
+        idempotency_key="request-1",
+        prompt="First",
+        max_pending=2,
+    )
+    await store.reserve_run(
+        "tenant/acme",
+        session.id,
+        idempotency_key="request-2",
+        prompt="Second",
+        max_pending=2,
+    )
+
+    with raises(RunAdmissionError):
+        await store.reserve_run(
+            "tenant/acme",
+            session.id,
+            idempotency_key="request-3",
+            prompt="Third",
+            max_pending=2,
+        )
+    replay = await store.reserve_run(
+        "tenant/acme",
+        session.id,
+        idempotency_key="request-1",
+        prompt="First",
+        max_pending=2,
+    )
+
+    assert replay.created is False
+    assert replay.run.id == first.run.id
 
 
 async def test_claimed_run_events_are_ordered_and_durable(tmp_path) -> None:

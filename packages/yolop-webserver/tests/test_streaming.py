@@ -142,17 +142,24 @@ async def test_failed_stream_is_not_saved_and_returns_a_safe_error(tmp_path) -> 
     assert "secret provider detail" not in response.text
 
 
-async def test_disconnected_stream_is_cancelled_without_saving(tmp_path) -> None:
+async def test_disconnected_stream_detaches_from_a_durable_run(tmp_path) -> None:
     started = asyncio.Event()
+    release = asyncio.Event()
     cancelled = asyncio.Event()
+    calls = 0
 
-    async def wait_forever(_messages: list[ModelMessage], _info: AgentInfo) -> AsyncIterator[str]:
+    async def wait_for_release(
+        _messages: list[ModelMessage], _info: AgentInfo
+    ) -> AsyncIterator[str]:
+        nonlocal calls
+        calls += 1
         started.set()
         try:
-            await asyncio.Event().wait()
-        finally:
+            await release.wait()
+        except asyncio.CancelledError:
             cancelled.set()
-        yield "unreachable"  # pragma: no cover
+            raise
+        yield "finished"
 
     store = SQLiteRuntimeStore(tmp_path / "runtime.db")
     spec = AgentSpec()
@@ -166,7 +173,7 @@ async def test_disconnected_stream_is_cancelled_without_saving(tmp_path) -> None
         namespace_resolver=local_namespace,
         deps_resolver=no_deps,
         deps_type=type(None),
-        model=FunctionModel(stream_function=wait_forever),
+        model=FunctionModel(stream_function=wait_for_release),
         model_id="test:function",
     )
     request_sent = False
@@ -208,10 +215,22 @@ async def test_disconnected_stream_is_cancelled_without_saving(tmp_path) -> None
         send,
     )
 
-    await asyncio.wait_for(cancelled.wait(), timeout=1)
-    loaded = await store.load_session("local", session.id)
-    assert loaded.messages == []
-    assert loaded.revision == session.revision
+    assert cancelled.is_set() is False
+    release.set()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        retry = await client.post(
+            f"/v1/sessions/{session.id}/runs/stream",
+            headers={"Idempotency-Key": "request-1"},
+            json={"prompt": "Wait"},
+        )
+        loaded = await client.get(f"/v1/sessions/{session.id}")
+
+    assert _parse_sse(retry.text)[-1][0] == "run_completed"
+    assert calls == 1
+    assert [message["kind"] for message in loaded.json()["messages"]] == [
+        "request",
+        "response",
+    ]
 
 
 async def test_different_sessions_can_stream_concurrently(tmp_path) -> None:

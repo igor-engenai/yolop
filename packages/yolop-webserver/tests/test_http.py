@@ -9,7 +9,7 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.models.test import TestModel
 from pytest import raises
 from yolop_sqlite_session import SQLiteRuntimeStore
-from yolop_webserver import create_app
+from yolop_webserver import RunLimits, create_app
 
 
 def local_namespace(_request: Request) -> str:
@@ -270,6 +270,251 @@ async def test_failed_json_run_is_replayed_without_a_second_model_call(tmp_path)
         "code": "agent_run_failed",
         "detail": "Agent run failed",
     }
+    assert calls == 1
+
+
+async def test_global_model_concurrency_is_bounded(tmp_path) -> None:
+    active = 0
+    maximum_active = 0
+    two_started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def respond(_messages: list[ModelMessage], _info: AgentInfo) -> AsyncIterator[str]:
+        nonlocal active, maximum_active
+        active += 1
+        maximum_active = max(maximum_active, active)
+        if active == 2:
+            two_started.set()
+        try:
+            await release.wait()
+            yield "done"
+        finally:
+            active -= 1
+
+    app = create_app(
+        AgentSpec(),
+        SQLiteRuntimeStore(tmp_path / "runtime.db"),
+        namespace_resolver=local_namespace,
+        deps_resolver=no_deps,
+        deps_type=type(None),
+        model=FunctionModel(stream_function=respond),
+        model_id="test:function",
+        limits=RunLimits(max_active_runs=2, max_supervised_runs=3, poll_interval=0.005),
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        sessions = [(await client.post("/v1/sessions")).json()["id"] for _ in range(3)]
+        requests = [
+            asyncio.create_task(
+                client.post(
+                    f"/v1/sessions/{session_id}/runs",
+                    headers={"Idempotency-Key": f"request-{index}"},
+                    json={"prompt": "Run"},
+                )
+            )
+            for index, session_id in enumerate(sessions)
+        ]
+        await asyncio.wait_for(two_started.wait(), timeout=1)
+        await asyncio.sleep(0.05)
+        assert maximum_active == 2
+        release.set()
+        responses = await asyncio.gather(*requests)
+
+    assert all(response.status_code == 200 for response in responses)
+    assert maximum_active == 2
+
+
+async def test_global_supervisor_rejects_excess_queued_runs(tmp_path) -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def respond(_messages: list[ModelMessage], _info: AgentInfo) -> AsyncIterator[str]:
+        started.set()
+        await release.wait()
+        yield "done"
+
+    app = create_app(
+        AgentSpec(),
+        SQLiteRuntimeStore(tmp_path / "runtime.db"),
+        namespace_resolver=local_namespace,
+        deps_resolver=no_deps,
+        deps_type=type(None),
+        model=FunctionModel(stream_function=respond),
+        model_id="test:function",
+        limits=RunLimits(
+            max_active_runs=1,
+            max_supervised_runs=2,
+            poll_interval=0.005,
+        ),
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        sessions = [(await client.post("/v1/sessions")).json()["id"] for _ in range(3)]
+        first = asyncio.create_task(
+            client.post(
+                f"/v1/sessions/{sessions[0]}/runs",
+                headers={"Idempotency-Key": "request-1"},
+                json={"prompt": "First"},
+            )
+        )
+        await started.wait()
+        second = asyncio.create_task(
+            client.post(
+                f"/v1/sessions/{sessions[1]}/runs",
+                headers={"Idempotency-Key": "request-2"},
+                json={"prompt": "Second"},
+            )
+        )
+        await asyncio.sleep(0.05)
+        rejected = await client.post(
+            f"/v1/sessions/{sessions[2]}/runs",
+            headers={"Idempotency-Key": "request-3"},
+            json={"prompt": "Third"},
+        )
+        release.set()
+        completed = await asyncio.gather(first, second)
+
+    assert rejected.status_code == 429
+    assert rejected.json()["code"] == "run_queue_full"
+    assert all(response.status_code == 200 for response in completed)
+
+
+async def test_per_session_queue_rejects_excess_runs(tmp_path) -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def respond(_messages: list[ModelMessage], _info: AgentInfo) -> AsyncIterator[str]:
+        started.set()
+        await release.wait()
+        yield "done"
+
+    app = create_app(
+        AgentSpec(),
+        SQLiteRuntimeStore(tmp_path / "runtime.db"),
+        namespace_resolver=local_namespace,
+        deps_resolver=no_deps,
+        deps_type=type(None),
+        model=FunctionModel(stream_function=respond),
+        model_id="test:function",
+        limits=RunLimits(max_pending_per_session=2, poll_interval=0.005),
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        session_id = (await client.post("/v1/sessions")).json()["id"]
+        first = asyncio.create_task(
+            client.post(
+                f"/v1/sessions/{session_id}/runs",
+                headers={"Idempotency-Key": "request-1"},
+                json={"prompt": "First"},
+            )
+        )
+        await started.wait()
+        second = asyncio.create_task(
+            client.post(
+                f"/v1/sessions/{session_id}/runs",
+                headers={"Idempotency-Key": "request-2"},
+                json={"prompt": "Second"},
+            )
+        )
+        await asyncio.sleep(0.05)
+        rejected = await client.post(
+            f"/v1/sessions/{session_id}/runs",
+            headers={"Idempotency-Key": "request-3"},
+            json={"prompt": "Third"},
+        )
+        release.set()
+        completed = await asyncio.gather(first, second)
+
+    assert rejected.status_code == 429
+    assert rejected.json()["code"] == "run_queue_full"
+    assert all(response.status_code == 200 for response in completed)
+
+
+async def test_session_lock_timeout_returns_a_stable_service_error(tmp_path) -> None:
+    calls = 0
+
+    async def respond(_messages: list[ModelMessage], _info: AgentInfo) -> AsyncIterator[str]:
+        nonlocal calls
+        calls += 1
+        yield "must not run"
+
+    store = SQLiteRuntimeStore(tmp_path / "runtime.db")
+    app = create_app(
+        AgentSpec(),
+        store,
+        namespace_resolver=local_namespace,
+        deps_resolver=no_deps,
+        deps_type=type(None),
+        model=FunctionModel(stream_function=respond),
+        model_id="test:function",
+        limits=RunLimits(session_lock_timeout=0.01, poll_interval=0.005),
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        session_id = (await client.post("/v1/sessions")).json()["id"]
+        async with store.lock_session("local", session_id, timeout=1):
+            response = await client.post(
+                f"/v1/sessions/{session_id}/runs",
+                headers={"Idempotency-Key": "request-1"},
+                json={"prompt": "Hello"},
+            )
+
+    assert response.status_code == 503
+    assert response.json()["code"] == "session_lock_timeout"
+    assert calls == 0
+
+
+async def test_shutdown_interrupts_owned_runs_without_retrying_tools(tmp_path) -> None:
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+    calls = 0
+
+    async def wait_forever(
+        _messages: list[ModelMessage], _info: AgentInfo
+    ) -> AsyncIterator[str]:
+        nonlocal calls
+        calls += 1
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+        yield "unreachable"  # pragma: no cover
+
+    app = create_app(
+        AgentSpec(),
+        SQLiteRuntimeStore(tmp_path / "runtime.db"),
+        namespace_resolver=local_namespace,
+        deps_resolver=no_deps,
+        deps_type=type(None),
+        model=FunctionModel(stream_function=wait_forever),
+        model_id="test:function",
+        limits=RunLimits(poll_interval=0.005),
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        async with app.router.lifespan_context(app):
+            session_id = (await client.post("/v1/sessions")).json()["id"]
+            request = asyncio.create_task(
+                client.post(
+                    f"/v1/sessions/{session_id}/runs",
+                    headers={"Idempotency-Key": "request-1"},
+                    json={"prompt": "Wait"},
+                )
+            )
+            await started.wait()
+        response = await request
+        retry = await client.post(
+            f"/v1/sessions/{session_id}/runs",
+            headers={"Idempotency-Key": "request-1"},
+            json={"prompt": "Wait"},
+        )
+
+    assert response.status_code == 503
+    assert retry.json() == response.json()
+    assert response.json()["code"] == "run_interrupted"
+    assert cancelled.is_set()
     assert calls == 1
 
 
