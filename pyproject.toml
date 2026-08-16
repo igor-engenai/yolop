@@ -9,12 +9,14 @@ description = "A small Pydantic AI runtime"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "pydantic-ai-harness>=0.21.0,<0.22",
     "pydantic-ai-slim[openai,spec]>=2.31.0",
     "pyyaml>=6.0.3",
 ]
 
 [project.entry-points."yolop.capabilities"]
 Skills = "yolop.skills:Skills"
+Workspace = "yolop.workspace:Workspace"
 
 [dependency-groups]
 dev = [
