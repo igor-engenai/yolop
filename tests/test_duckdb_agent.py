@@ -7,7 +7,8 @@ import duckdb
 from pydantic_ai import AgentSpec
 from pydantic_ai.messages import ModelMessage, ModelRequest, ToolReturnPart
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, DeltaToolCalls, FunctionModel
-from yolop_workspace_session import WorkspaceSessionStore
+from yolop_session import ExecutionPin
+from yolop_workspace_session import WorkspaceRuntimeStore
 
 from yolop import Yolop
 
@@ -26,8 +27,12 @@ async def test_duckdb_agentspec_runs_with_a_persistent_session(tmp_path: Path) -
     connection = duckdb.connect(":memory:", config={"enable_external_access": "false"})
     connection.execute("create table sales(amount integer)")
     connection.execute("insert into sales values (10), (20)")
-    store = WorkspaceSessionStore(tmp_path)
-    session = await store.create()
+    store = WorkspaceRuntimeStore(tmp_path)
+    assert isinstance(spec.model, str)
+    session = await store.create_session(
+        "local",
+        pin=ExecutionPin.from_spec(spec, model_id=spec.model),
+    )
 
     async def respond(
         messages: list[ModelMessage], _info: AgentInfo
@@ -68,9 +73,10 @@ async def test_duckdb_agentspec_runs_with_a_persistent_session(tmp_path: Path) -
     finally:
         connection.close()
 
-    saved = await store.replace(
+    saved = await store.replace_session(
+        "local",
         session.id,
         expected_revision=session.revision,
         messages=run.all_messages(),
     )
-    assert await store.load(session.id) == saved
+    assert await store.load_session("local", session.id) == saved

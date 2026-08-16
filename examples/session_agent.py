@@ -5,7 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from pydantic_ai import AgentSpec
-from yolop_workspace_session import WorkspaceSessionStore
+from yolop_session import ExecutionPin
+from yolop_workspace_session import WorkspaceRuntimeStore
 
 from yolop import Yolop
 
@@ -30,12 +31,18 @@ async def main() -> None:
 
     args = parse_args()
     workspace = Path.cwd()
-    store = WorkspaceSessionStore(workspace)
-    session = await store.load(args.session) if args.session else await store.create()
+    store = WorkspaceRuntimeStore(workspace)
+    spec = AgentSpec.from_file(SPEC_PATH)
+    assert isinstance(spec.model, str)
+    pin = ExecutionPin.from_spec(spec, model_id=spec.model)
+    session = (
+        await store.load_session("local", args.session)
+        if args.session
+        else await store.create_session("local", pin=pin)
+    )
     print(f"session: {session.id}")
 
     deps = HostDeps(workspace=workspace)
-    spec = AgentSpec.from_file(SPEC_PATH)
     async with Yolop().run(
         spec,
         args.prompt,
@@ -47,7 +54,8 @@ async def main() -> None:
             pass
 
     assert run.result is not None
-    await store.replace(
+    await store.replace_session(
+        "local",
         session.id,
         expected_revision=session.revision,
         messages=run.all_messages(),

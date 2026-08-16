@@ -5,13 +5,29 @@ from uuid import UUID, uuid4
 from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
 from pytest import raises
 from yolop_session import (
+    ExecutionPin,
     InvalidSessionIdError,
     SessionConflictError,
     SessionFormatError,
     SessionNotFoundError,
     SessionSnapshot,
 )
-from yolop_workspace_session import WorkspaceSessionStore
+from yolop_workspace_session import WorkspaceRuntimeStore, WorkspaceSessionStore
+
+
+async def test_workspace_runtime_store_uses_one_sqlite_database(tmp_path) -> None:
+    old_directory = tmp_path / ".yolop" / "sessions"
+    old_directory.mkdir(parents=True)
+    (old_directory / f"{uuid4()}.jsonl").write_text("")
+    pin = ExecutionPin(agent_spec_id="a" * 64, model_id="openai:model")
+    store = WorkspaceRuntimeStore(tmp_path)
+
+    session = await store.create_session("local", pin=pin)
+    reopened = WorkspaceRuntimeStore(tmp_path)
+
+    assert (tmp_path / ".yolop" / "runtime.db").is_file()
+    assert await reopened.list_sessions("local") == [session.id]
+    assert await reopened.load_session("local", session.id) == session
 
 
 async def test_create_returns_an_empty_generated_session(tmp_path) -> None:

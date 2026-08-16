@@ -11,6 +11,7 @@ dependencies = [
     "filelock>=3.20.0",
     "pydantic-ai-slim>=2.31.0",
     "yolop-session>=0.1.0",
+    "yolop-sqlite-session>=0.1.0",
 ]
 
 [tool.hatch.build.targets.wheel]
