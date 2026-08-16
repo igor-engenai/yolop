@@ -101,6 +101,7 @@ async def test_session_rejects_a_different_agent_pin_before_model_execution(tmp_
     ) as client:
         response = await client.post(
             f"/v1/sessions/{session_id}/runs",
+            headers={"Idempotency-Key": "request-1"},
             json={"prompt": "Hello"},
         )
 
@@ -141,13 +142,45 @@ async def test_client_can_manage_durable_sessions(tmp_path) -> None:
         assert (await client.get(f"/v1/sessions/{session['id']}")).status_code == 404
 
 
+async def test_json_run_requires_an_idempotency_key(tmp_path) -> None:
+    calls = 0
+
+    async def respond(_messages: list[ModelMessage], _info: AgentInfo) -> AsyncIterator[str]:
+        nonlocal calls
+        calls += 1
+        yield "must not run"
+
+    app = create_app(
+        AgentSpec(),
+        SQLiteRuntimeStore(tmp_path / "runtime.db"),
+        namespace_resolver=local_namespace,
+        deps_resolver=no_deps,
+        deps_type=type(None),
+        model=FunctionModel(stream_function=respond),
+        model_id="test:function",
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        session_id = (await client.post("/v1/sessions")).json()["id"]
+        response = await client.post(
+            f"/v1/sessions/{session_id}/runs",
+            json={"prompt": "Hello"},
+        )
+
+    assert response.status_code == 422
+    assert calls == 0
+
+
 async def test_json_run_uses_request_scoped_deps_and_persists_history(tmp_path) -> None:
     resolved: list[tuple[str, str]] = []
+    calls = 0
 
     def resolve_deps(namespace: str, session_id: str) -> None:
         resolved.append((namespace, session_id))
 
     async def respond(messages: list[ModelMessage], _info: AgentInfo) -> AsyncIterator[str]:
+        nonlocal calls
+        calls += 1
         request = messages[-1]
         assert isinstance(request, ModelRequest)
         prompt = request.parts[0]
@@ -169,11 +202,26 @@ async def test_json_run_uses_request_scoped_deps_and_persists_history(tmp_path) 
         session = (await client.post("/v1/sessions")).json()
         response = await client.post(
             f"/v1/sessions/{session['id']}/runs",
+            headers={"Idempotency-Key": "request-1"},
             json={"prompt": "Hello"},
+        )
+        retry = await client.post(
+            f"/v1/sessions/{session['id']}/runs",
+            headers={"Idempotency-Key": "request-1"},
+            json={"prompt": "Hello"},
+        )
+        conflict = await client.post(
+            f"/v1/sessions/{session['id']}/runs",
+            headers={"Idempotency-Key": "request-1"},
+            json={"prompt": "Different"},
         )
         loaded = (await client.get(f"/v1/sessions/{session['id']}")).json()
 
     assert response.status_code == 200
+    assert retry.json() == response.json()
+    assert conflict.status_code == 409
+    assert conflict.json()["code"] == "idempotency_conflict"
+    assert calls == 1
     assert resolved == [("local", session["id"])]
     result = response.json()
     assert result["output"] == "Hello from YoloP"
@@ -183,6 +231,46 @@ async def test_json_run_uses_request_scoped_deps_and_persists_history(tmp_path) 
     }
     assert result["usage"]["requests"] == 1
     assert [message["kind"] for message in loaded["messages"]] == ["request", "response"]
+
+
+async def test_failed_json_run_is_replayed_without_a_second_model_call(tmp_path) -> None:
+    calls = 0
+
+    async def fail(_messages: list[ModelMessage], _info: AgentInfo) -> AsyncIterator[str]:
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("provider secret")
+        yield "unreachable"  # pragma: no cover
+
+    app = create_app(
+        AgentSpec(),
+        SQLiteRuntimeStore(tmp_path / "runtime.db"),
+        namespace_resolver=local_namespace,
+        deps_resolver=no_deps,
+        deps_type=type(None),
+        model=FunctionModel(stream_function=fail),
+        model_id="test:function",
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        session_id = (await client.post("/v1/sessions")).json()["id"]
+        first = await client.post(
+            f"/v1/sessions/{session_id}/runs",
+            headers={"Idempotency-Key": "request-1"},
+            json={"prompt": "Fail"},
+        )
+        retry = await client.post(
+            f"/v1/sessions/{session_id}/runs",
+            headers={"Idempotency-Key": "request-1"},
+            json={"prompt": "Fail"},
+        )
+
+    assert first.status_code == 500
+    assert retry.json() == first.json() == {
+        "code": "agent_run_failed",
+        "detail": "Agent run failed",
+    }
+    assert calls == 1
 
 
 async def test_runs_for_one_session_wait_and_use_the_latest_history(tmp_path) -> None:
@@ -201,30 +289,46 @@ async def test_runs_for_one_session_wait_and_use_the_latest_history(tmp_path) ->
             assert len(messages) == 3
             yield "Second answer"
 
-    app = create_app(
-        AgentSpec(),
-        SQLiteRuntimeStore(tmp_path / "runtime.db"),
-        namespace_resolver=local_namespace,
-        deps_resolver=no_deps,
-        deps_type=type(None),
-        model=FunctionModel(stream_function=respond),
-        model_id="test:function",
-    )
+    database = tmp_path / "runtime.db"
+    model = FunctionModel(stream_function=respond)
+    apps = [
+        create_app(
+            AgentSpec(),
+            SQLiteRuntimeStore(database),
+            namespace_resolver=local_namespace,
+            deps_resolver=no_deps,
+            deps_type=type(None),
+            model=model,
+            model_id="test:function",
+        )
+        for _ in range(2)
+    ]
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        session_id = (await client.post("/v1/sessions")).json()["id"]
+    async with (
+        AsyncClient(transport=ASGITransport(app=apps[0]), base_url="http://test") as first_client,
+        AsyncClient(transport=ASGITransport(app=apps[1]), base_url="http://test") as second_client,
+    ):
+        session_id = (await first_client.post("/v1/sessions")).json()["id"]
         first = asyncio.create_task(
-            client.post(f"/v1/sessions/{session_id}/runs", json={"prompt": "First"})
+            first_client.post(
+                f"/v1/sessions/{session_id}/runs",
+                headers={"Idempotency-Key": "request-1"},
+                json={"prompt": "First"},
+            )
         )
         await first_started.wait()
         second = asyncio.create_task(
-            client.post(f"/v1/sessions/{session_id}/runs", json={"prompt": "Second"})
+            second_client.post(
+                f"/v1/sessions/{session_id}/runs",
+                headers={"Idempotency-Key": "request-2"},
+                json={"prompt": "Second"},
+            )
         )
         await asyncio.sleep(0)
         assert calls == 1
         release_first.set()
         responses = await asyncio.gather(first, second)
-        loaded = (await client.get(f"/v1/sessions/{session_id}")).json()
+        loaded = (await first_client.get(f"/v1/sessions/{session_id}")).json()
 
     assert [response.json()["output"] for response in responses] == [
         "First answer",

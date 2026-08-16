@@ -41,6 +41,7 @@ async def test_stream_returns_native_events_then_a_durable_completion(tmp_path) 
         async with client.stream(
             "POST",
             f"/v1/sessions/{session['id']}/runs/stream",
+            headers={"Idempotency-Key": "request-1"},
             json={"prompt": "Hello"},
         ) as response:
             content_type = response.headers["content-type"]
@@ -48,6 +49,7 @@ async def test_stream_returns_native_events_then_a_durable_completion(tmp_path) 
         loaded = (await client.get(f"/v1/sessions/{session['id']}")).json()
 
     assert content_type.startswith("text/event-stream")
+    assert "id: 1" in body
     events = _parse_sse(body)
     assert [name for name, _data in events] == [
         "part_start",
@@ -64,6 +66,44 @@ async def test_stream_returns_native_events_then_a_durable_completion(tmp_path) 
         "revision": loaded["revision"],
     }
     assert [message["kind"] for message in loaded["messages"]] == ["request", "response"]
+
+
+async def test_stream_retry_replays_persisted_events_without_a_second_model_call(
+    tmp_path,
+) -> None:
+    calls = 0
+
+    async def respond(_messages: list[ModelMessage], _info: AgentInfo) -> AsyncIterator[str]:
+        nonlocal calls
+        calls += 1
+        yield "Hello"
+
+    app = create_app(
+        AgentSpec(),
+        SQLiteRuntimeStore(tmp_path / "runtime.db"),
+        namespace_resolver=local_namespace,
+        deps_resolver=no_deps,
+        deps_type=type(None),
+        model=FunctionModel(stream_function=respond),
+        model_id="test:function",
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        session_id = (await client.post("/v1/sessions")).json()["id"]
+        first = await client.post(
+            f"/v1/sessions/{session_id}/runs/stream",
+            headers={"Idempotency-Key": "request-1"},
+            json={"prompt": "Hello"},
+        )
+        retry = await client.post(
+            f"/v1/sessions/{session_id}/runs/stream",
+            headers={"Idempotency-Key": "request-1"},
+            json={"prompt": "Hello"},
+        )
+
+    assert calls == 1
+    assert _parse_sse(retry.text) == _parse_sse(first.text)
+    assert _parse_sse(retry.text)[-1][0] == "run_completed"
 
 
 async def test_failed_stream_is_not_saved_and_returns_a_safe_error(tmp_path) -> None:
@@ -85,6 +125,7 @@ async def test_failed_stream_is_not_saved_and_returns_a_safe_error(tmp_path) -> 
         session = (await client.post("/v1/sessions")).json()
         response = await client.post(
             f"/v1/sessions/{session['id']}/runs/stream",
+            headers={"Idempotency-Key": "request-1"},
             json={"prompt": "Fail"},
         )
         loaded = (await client.get(f"/v1/sessions/{session['id']}")).json()
@@ -156,7 +197,10 @@ async def test_disconnected_stream_is_cancelled_without_saving(tmp_path) -> None
             "raw_path": f"/v1/sessions/{session.id}/runs/stream".encode(),
             "query_string": b"",
             "root_path": "",
-            "headers": [(b"content-type", b"application/json")],
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"idempotency-key", b"request-1"),
+            ],
             "client": ("127.0.0.1", 1234),
             "server": ("127.0.0.1", 80),
         },
@@ -199,6 +243,7 @@ async def test_different_sessions_can_stream_concurrently(tmp_path) -> None:
             asyncio.create_task(
                 client.post(
                     f"/v1/sessions/{session_id}/runs/stream",
+                    headers={"Idempotency-Key": f"request-{session_id}"},
                     json={"prompt": "Run"},
                 )
             )

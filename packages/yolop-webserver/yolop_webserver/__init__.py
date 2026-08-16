@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
-from typing import Any, cast
+from typing import Annotated, Any, cast
+from uuid import uuid4
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Header, Request
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field, TypeAdapter
 from pydantic_ai import AgentRunResultEvent, AgentSpec, AgentStreamEvent
@@ -16,7 +18,11 @@ from pydantic_ai.usage import RunUsage
 from sse_starlette import EventSourceResponse
 from yolop_session import (
     ExecutionPin,
+    IdempotencyConflictError,
     InvalidSessionIdError,
+    RunStateError,
+    RunStatus,
+    RuntimeRunSnapshot,
     RuntimeSessionSnapshot,
     RuntimeStore,
     SessionConflictError,
@@ -24,6 +30,7 @@ from yolop_session import (
     SessionLockTimeoutError,
     SessionNotFoundError,
     SessionPinMismatchError,
+    StoredRunEvent,
     ensure_session_pin,
     validate_namespace,
 )
@@ -55,9 +62,18 @@ class RunRequest(BaseModel):
 
 
 class RunResponse(BaseModel):
+    run_id: str
     output: Any
     usage: RunUsage
     session: SessionReference
+
+
+class _TerminalRunError(RuntimeError):
+    def __init__(self, status_code: int, code: str, detail: str) -> None:
+        super().__init__(detail)
+        self.status_code = status_code
+        self.code = code
+        self.detail = detail
 
 
 def create_app[DepsT](
@@ -73,6 +89,7 @@ def create_app[DepsT](
     """Create a FastAPI application for one host-selected AgentSpec."""
     app = FastAPI(title="YoloP")
     runtime = Yolop()
+    owner_id = str(uuid4())
     pin = _execution_pin(agent_spec, model=model, model_id=model_id)
     _install_runtime_error_handlers(app)
 
@@ -112,48 +129,124 @@ def create_app[DepsT](
         request: Request,
         session_id: str,
         run_request: RunRequest,
+        idempotency_key: Annotated[
+            str,
+            Header(alias="Idempotency-Key", min_length=1, max_length=255),
+        ],
     ) -> RunResponse:
         namespace = await _resolve_namespace(namespace_resolver, request)
+        initial_session = await runtime_store.load_session(namespace, session_id)
+        ensure_session_pin(initial_session, pin)
+        reservation = await runtime_store.reserve_run(
+            namespace,
+            session_id,
+            idempotency_key=idempotency_key,
+            prompt=run_request.prompt,
+        )
         async with runtime_store.lock_session(namespace, session_id, timeout=30):
+            stored_run = await runtime_store.load_run(namespace, reservation.run.id)
+            if stored_run.status is RunStatus.COMPLETED:
+                return _completed_run_response(stored_run)
+            if stored_run.status in {RunStatus.FAILED, RunStatus.INTERRUPTED}:
+                raise _terminal_run_error(stored_run)
+            if stored_run.status is not RunStatus.ACCEPTED:
+                raise RunStateError(f"Run {stored_run.id!r} is already active")
+            stored_run = await runtime_store.claim_run(
+                namespace,
+                stored_run.id,
+                owner_id=owner_id,
+                lease_seconds=60,
+            )
             session = await runtime_store.load_session(namespace, session_id)
             ensure_session_pin(session, pin)
             deps = await _resolve_deps(deps_resolver, namespace, session_id)
-            async with runtime.run(
-                agent_spec,
-                run_request.prompt,
-                deps=deps,
-                deps_type=deps_type,
-                model=model,
-                message_history=session.messages,
-            ) as run:
-                async for _ in run:
-                    pass
-            assert run.result is not None
-            saved = await runtime_store.replace_session(
-                namespace,
-                session_id,
-                expected_revision=session.revision,
-                messages=run.all_messages(),
-            )
-        return RunResponse(
-            output=run.result.output,
-            usage=run.result.usage,
-            session=_session_reference(saved),
-        )
+            try:
+                async with runtime.run(
+                    agent_spec,
+                    run_request.prompt,
+                    deps=deps,
+                    deps_type=deps_type,
+                    model=model,
+                    message_history=session.messages,
+                ) as agent_run:
+                    async for event in agent_run:
+                        if isinstance(event, AgentRunResultEvent):
+                            continue
+                        await runtime_store.append_run_event(
+                            namespace,
+                            stored_run.id,
+                            owner_id=owner_id,
+                            event=event.event_kind,
+                            data=_STREAM_EVENT_ADAPTER.dump_json(event).decode(),
+                        )
+                assert agent_run.result is not None
+                completion = await runtime_store.complete_run(
+                    namespace,
+                    stored_run.id,
+                    owner_id=owner_id,
+                    expected_session_revision=session.revision,
+                    messages=agent_run.all_messages(),
+                    output=agent_run.result.output,
+                    usage=agent_run.result.usage,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                failed = await runtime_store.fail_run(
+                    namespace,
+                    stored_run.id,
+                    owner_id=owner_id,
+                    error_code="agent_run_failed",
+                    error_detail="Agent run failed",
+                )
+                _LOGGER.exception("YoloP run failed for session %s", session_id)
+                raise _terminal_run_error(failed) from error
+        return _completed_run_response(completion.run)
 
     @app.post("/v1/sessions/{session_id}/runs/stream")
     async def stream_agent(
         request: Request,
         session_id: str,
         run_request: RunRequest,
+        idempotency_key: Annotated[
+            str,
+            Header(alias="Idempotency-Key", min_length=1, max_length=255),
+        ],
     ) -> EventSourceResponse:
         namespace = await _resolve_namespace(namespace_resolver, request)
         initial_session = await runtime_store.load_session(namespace, session_id)
         ensure_session_pin(initial_session, pin)
+        reservation = await runtime_store.reserve_run(
+            namespace,
+            session_id,
+            idempotency_key=idempotency_key,
+            prompt=run_request.prompt,
+        )
 
         async def events() -> AsyncIterator[dict[str, str]]:
+            claimed = False
             try:
                 async with runtime_store.lock_session(namespace, session_id, timeout=30):
+                    stored_run = await runtime_store.load_run(namespace, reservation.run.id)
+                    if stored_run.status is not RunStatus.ACCEPTED:
+                        for stored_event in await runtime_store.list_run_events(
+                            namespace,
+                            stored_run.id,
+                        ):
+                            yield _sse_event(stored_event)
+                        if stored_run.status is RunStatus.COMPLETED:
+                            yield _completion_event(stored_run)
+                        else:
+                            yield _run_error_event(stored_run)
+                        return
+
+                    stored_run = await runtime_store.claim_run(
+                        namespace,
+                        stored_run.id,
+                        owner_id=owner_id,
+                        lease_seconds=60,
+                    )
+                    claimed = True
                     session = await runtime_store.load_session(namespace, session_id)
                     ensure_session_pin(session, pin)
                     deps = await _resolve_deps(deps_resolver, namespace, session_id)
@@ -164,30 +257,40 @@ def create_app[DepsT](
                         deps_type=deps_type,
                         model=model,
                         message_history=session.messages,
-                    ) as run:
-                        async for event in run:
+                    ) as agent_run:
+                        async for event in agent_run:
                             if isinstance(event, AgentRunResultEvent):
                                 continue
-                            yield {
-                                "event": event.event_kind,
-                                "data": _STREAM_EVENT_ADAPTER.dump_json(event).decode(),
-                            }
-                    assert run.result is not None
-                    saved = await runtime_store.replace_session(
+                            stored_event = await runtime_store.append_run_event(
+                                namespace,
+                                stored_run.id,
+                                owner_id=owner_id,
+                                event=event.event_kind,
+                                data=_STREAM_EVENT_ADAPTER.dump_json(event).decode(),
+                            )
+                            yield _sse_event(stored_event)
+                    assert agent_run.result is not None
+                    completion = await runtime_store.complete_run(
                         namespace,
-                        session_id,
-                        expected_revision=session.revision,
-                        messages=run.all_messages(),
+                        stored_run.id,
+                        owner_id=owner_id,
+                        expected_session_revision=session.revision,
+                        messages=agent_run.all_messages(),
+                        output=agent_run.result.output,
+                        usage=agent_run.result.usage,
                     )
-                completion = RunResponse(
-                    output=run.result.output,
-                    usage=run.result.usage,
-                    session=_session_reference(saved),
-                )
-                yield {"event": "run_completed", "data": completion.model_dump_json()}
+                yield _completion_event(completion.run)
             except asyncio.CancelledError:
                 raise
             except Exception:
+                if claimed:
+                    await runtime_store.fail_run(
+                        namespace,
+                        reservation.run.id,
+                        owner_id=owner_id,
+                        error_code="agent_run_failed",
+                        error_detail="Agent run failed",
+                    )
                 _LOGGER.exception("YoloP streaming run failed for session %s", session_id)
                 yield {
                     "event": "run_error",
@@ -197,6 +300,50 @@ def create_app[DepsT](
         return EventSourceResponse(events())
 
     return app
+
+
+def _terminal_run_error(run: RuntimeRunSnapshot) -> _TerminalRunError:
+    status_code = 503 if run.status is RunStatus.INTERRUPTED else 500
+    return _TerminalRunError(
+        status_code,
+        run.error_code or "run_failed",
+        run.error_detail or "Run failed",
+    )
+
+
+def _sse_event(event: StoredRunEvent) -> dict[str, str]:
+    return {"id": str(event.sequence), "event": event.event, "data": event.data}
+
+
+def _completion_event(run: RuntimeRunSnapshot) -> dict[str, str]:
+    return {
+        "event": "run_completed",
+        "data": _completed_run_response(run).model_dump_json(),
+    }
+
+
+def _run_error_event(run: RuntimeRunSnapshot) -> dict[str, str]:
+    code = run.error_code or "run_state_conflict"
+    detail = run.error_detail or "Run did not complete"
+    return {
+        "event": "run_error",
+        "data": json.dumps({"code": code, "detail": detail}, separators=(",", ":")),
+    }
+
+
+def _completed_run_response(run: RuntimeRunSnapshot) -> RunResponse:
+    if (
+        run.status is not RunStatus.COMPLETED
+        or run.usage is None
+        or run.session_revision is None
+    ):
+        raise RunStateError(f"Run {run.id!r} has no durable completion")
+    return RunResponse(
+        run_id=run.id,
+        output=run.output,
+        usage=run.usage,
+        session=SessionReference(id=run.session_id, revision=run.session_revision),
+    )
 
 
 def _execution_pin(
@@ -253,6 +400,21 @@ def _install_runtime_error_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(SessionConflictError)
     async def session_conflict(_request: Request, error: SessionConflictError) -> JSONResponse:
+        return _error_response(409, error.code, str(error))
+
+    @app.exception_handler(_TerminalRunError)
+    async def terminal_run_error(_request: Request, error: _TerminalRunError) -> JSONResponse:
+        return _error_response(error.status_code, error.code, error.detail)
+
+    @app.exception_handler(IdempotencyConflictError)
+    async def idempotency_conflict(
+        _request: Request,
+        error: IdempotencyConflictError,
+    ) -> JSONResponse:
+        return _error_response(409, error.code, str(error))
+
+    @app.exception_handler(RunStateError)
+    async def run_state_conflict(_request: Request, error: RunStateError) -> JSONResponse:
         return _error_response(409, error.code, str(error))
 
     @app.exception_handler(SessionPinMismatchError)

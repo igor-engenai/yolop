@@ -39,6 +39,7 @@ async def test_chat_agentspec_runs_through_the_streaming_web_host(tmp_path: Path
         session_id = (await client.post("/v1/sessions")).json()["id"]
         response = await client.post(
             f"/v1/sessions/{session_id}/runs/stream",
+            headers={"Idempotency-Key": "request-1"},
             json={"prompt": "Hello"},
         )
 

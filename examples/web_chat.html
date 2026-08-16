@@ -136,7 +136,11 @@
       `/v1/sessions/${encodeURIComponent(sessionInput.value)}/runs/stream`,
       {
         method: "POST",
-        headers: { "content-type": "application/json", "accept": "text/event-stream" },
+        headers: {
+          "content-type": "application/json",
+          "accept": "text/event-stream",
+          "Idempotency-Key": crypto.randomUUID()
+        },
         body: JSON.stringify({ prompt })
       }
     );
