@@ -43,6 +43,28 @@ uv run python examples/session_agent.py \
 
 The host explicitly loads and saves the session around `Yolop.run()`. Each session is stored at `.yolop/sessions/<session-id>.jsonl` in the current workspace. A save passes the loaded revision and atomically replaces the full history with `run.all_messages()`.
 
+## Query DuckDB with a session
+
+Create a session for an existing database:
+
+```bash
+uv run python examples/duckdb_agent.py \
+  --database analytics.duckdb \
+  "Show total revenue by month"
+# session: 68a094a7-3953-4f89-9acf-d60dc343d529
+```
+
+Resume the session against the same database:
+
+```bash
+uv run python examples/duckdb_agent.py \
+  --database analytics.duckdb \
+  --session 68a094a7-3953-4f89-9acf-d60dc343d529 \
+  "Now group the result by customer segment"
+```
+
+The host opens the database read-only with external access disabled and passes the connection through `deps.duckdb_connection`. AgentSpec contains no database path. The capability requires this secure connection setting, accepts one DuckDB SELECT-class statement per tool call, and returns at most the AgentSpec `max_rows` value.
+
 ## Runtime API
 
 ```python
@@ -72,7 +94,11 @@ The core package contains:
 - AgentSpec-based capability discovery;
 - the generic Skills capability and bundled default skills.
 
-It does not contain agent-specific AgentSpec files, Workspace code, model providers, or `pydantic-ai-harness`.
+It does not contain agent-specific AgentSpec files, Workspace code, DuckDB code, model providers, or `pydantic-ai-harness`.
+
+### `yolop-duckdb`
+
+[`packages/yolop-duckdb`](packages/yolop-duckdb) is a separate capability plugin. It owns the DuckDB dependency, resolves a host-provided connection, and exposes the `query_duckdb` model tool. Its entry point is loaded only when AgentSpec selects `DuckDB`.
 
 ### `yolop-workspace`
 
