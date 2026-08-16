@@ -22,6 +22,9 @@ class CapturingOutput(DummyOutput):
     def get_size(self) -> Size:
         return Size(rows=self.rows, columns=self.columns)
 
+    def get_rows_below_cursor_position(self) -> int:
+        return self.rows
+
     @property
     def text(self) -> str:
         return "".join(self.writes)
@@ -72,6 +75,111 @@ async def test_inline_terminal_keeps_editor_visible_after_long_output() -> None:
     assert "Window too small" not in output.text
     assert "response line 19" in output.text
     assert "╭─ prompt" in output.text
+
+
+async def test_page_up_scrolls_the_transcript_without_moving_editor_focus() -> None:
+    submitted: list[str] = []
+    output = CapturingOutput(rows=8)
+
+    with create_pipe_input() as pipe_input:
+        with create_app_session(input=pipe_input, output=output):
+            terminal = InlineTerminal(on_submit=submitted.append)
+            lines = [f"earlier line {index}" for index in range(16)]
+            lines[12] = "SCROLLED-TWELVE"
+            lines.extend("################" for _index in range(4))
+            terminal.set_transcript("\n".join(lines))
+            running = asyncio.create_task(terminal.run())
+            await terminal.wait_until_ready()
+            await asyncio.sleep(0.01)
+
+            assert "SCROLLED-TWELVE" not in output.text
+            pipe_input.send_bytes(b"\x1b[5~")
+            async with asyncio.timeout(1):
+                while "SCROLLED-TWELVE" not in output.text:
+                    await asyncio.sleep(0)
+            pipe_input.send_bytes(b"\x1b[6~")
+            await asyncio.sleep(0.01)
+            terminal.set_transcript("\n".join([*lines, "PAGE-DOWN-LIVE"]))
+            async with asyncio.timeout(1):
+                while "PAGE-DOWN-LIVE" not in output.text:
+                    await asyncio.sleep(0)
+            pipe_input.send_text("still editing\r")
+            async with asyncio.timeout(1):
+                while not submitted:
+                    await asyncio.sleep(0)
+            terminal.stop()
+            await running
+
+    assert submitted == ["still editing"]
+
+
+async def test_mouse_wheel_scrolls_the_transcript() -> None:
+    output = CapturingOutput(rows=8)
+
+    with create_pipe_input() as pipe_input:
+        with create_app_session(input=pipe_input, output=output):
+            terminal = InlineTerminal(on_submit=lambda _text: None)
+            lines = [f"earlier line {index}" for index in range(16)]
+            lines[15] = "MOUSE-SCROLLED"
+            lines.extend("################" for _index in range(4))
+            terminal.set_transcript("\n".join(lines))
+            running = asyncio.create_task(terminal.run())
+            await terminal.wait_until_ready()
+            await asyncio.sleep(0.01)
+
+            assert "MOUSE-SCROLLED" not in output.text
+            pipe_input.send_bytes(b"\x1b[<64;80;1M")
+            async with asyncio.timeout(1):
+                while "MOUSE-SCROLLED" not in output.text:
+                    await asyncio.sleep(0)
+            terminal.set_transcript("\n".join([*lines, "MOUSE-PAUSED-NEWEST"]))
+            await asyncio.sleep(0.01)
+            assert "MOUSE-PAUSED-NEWEST" not in output.text
+            pipe_input.send_bytes(b"\x1b[<65;80;1M\x1b[<65;80;1M")
+            await asyncio.sleep(0.01)
+            terminal.set_transcript("\n".join([*lines, "MOUSE-PAUSED-NEWEST", "XXXXXXXXXXXXXXXX"]))
+            async with asyncio.timeout(1):
+                while "XXXXXXXXXXXXXXXX" not in output.text:
+                    await asyncio.sleep(0)
+            terminal.stop()
+            await running
+
+
+async def test_streaming_pauses_while_scrolled_and_end_resumes_following() -> None:
+    output = CapturingOutput(rows=8)
+
+    with create_pipe_input() as pipe_input:
+        with create_app_session(input=pipe_input, output=output):
+            terminal = InlineTerminal(on_submit=lambda _text: None)
+            lines = [f"history {index}" for index in range(16)]
+            lines.extend("################" for _index in range(4))
+            terminal.set_transcript("\n".join(lines))
+            running = asyncio.create_task(terminal.run())
+            await terminal.wait_until_ready()
+            await asyncio.sleep(0.01)
+
+            pipe_input.send_bytes(b"\x1b[5~")
+            await asyncio.sleep(0.01)
+            terminal.set_transcript("\n".join([*lines, "PAUSED-NEWEST"]))
+            await asyncio.sleep(0.01)
+            assert "PAUSED-NEWEST" not in output.text
+            output.rows = 12
+            terminal.set_transcript("\n".join([*lines, "PAUSED-NEWEST", "RESIZED-PAUSED"]))
+            await asyncio.sleep(0.01)
+            assert "RESIZED-PAUSED" not in output.text
+
+            pipe_input.send_bytes(b"\x1b[F")
+            async with asyncio.timeout(1):
+                while "RESIZED-PAUSED" not in output.text:
+                    await asyncio.sleep(0)
+            terminal.set_transcript(
+                "\n".join([*lines, "PAUSED-NEWEST", "RESIZED-PAUSED", "XXXXXXXXXXXXXXXX"])
+            )
+            async with asyncio.timeout(1):
+                while "XXXXXXXXXXXXXXXX" not in output.text:
+                    await asyncio.sleep(0)
+            terminal.stop()
+            await running
 
 
 async def test_inline_terminal_keeps_latest_output_visible_after_vertical_resize() -> None:

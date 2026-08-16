@@ -79,7 +79,12 @@ While a run streams, Enter sends a native `asap` steering message. Escape cancel
 - Ctrl+C: cancel an active run, clear non-empty input, or exit when idle and empty;
 - Ctrl+D: exit when the editor is empty;
 - Ctrl+O: show or hide tool details;
-- Ctrl+T: show or hide thinking.
+- Ctrl+T: show or hide thinking;
+- PageUp/PageDown: scroll the transcript by one visible page;
+- mouse wheel or trackpad: scroll transcript lines;
+- End: return to the newest output and resume automatic following.
+
+New streamed output follows automatically while the transcript is at the bottom. Scrolling up pauses that following until PageDown, mouse-down scrolling, or End reaches the bottom. Mouse mode is active while the TUI runs; use the terminal's modifier key, usually Shift, for native text selection.
 
 The only built-in commands are `/new`, `/resume`, `/help`, and `/quit`. Type `@` to fuzzy-complete project files. Text attachments must stay inside the project, use UTF-8, contain no null bytes, remain below 256 KiB each, and remain below 1 MiB in total.
 

@@ -34,18 +34,15 @@ def test_cli_runs_inline_and_ctrl_c_exits_in_a_real_pseudo_terminal(tmp_path: Pa
         assert b"prompt" in output
 
         os.write(master, b"\x03")
-        assert process.wait(timeout=5) == 0
-        while True:
-            readable, _, _ = select.select([master], [], [], 0)
-            if not readable:
-                break
-            try:
-                chunk = os.read(master, 65536)
-            except OSError:
-                break
-            if not chunk:
-                break
-            output.extend(chunk)
+        exit_deadline = time.monotonic() + 5
+        while process.poll() is None and time.monotonic() < exit_deadline:
+            readable, _, _ = select.select([master], [], [], 0.1)
+            if readable:
+                try:
+                    output.extend(os.read(master, 65536))
+                except OSError:
+                    break
+        assert process.wait(timeout=1) == 0
     finally:
         if process.poll() is None:
             process.kill()
@@ -53,4 +50,6 @@ def test_cli_runs_inline_and_ctrl_c_exits_in_a_real_pseudo_terminal(tmp_path: Pa
         os.close(master)
 
     assert b"\x1b[?1049h" not in output
+    assert b"\x1b[?1006h" in output
+    assert b"\x1b[?1006l" in output
     assert (tmp_path / ".yolop" / "runtime.db").is_file()

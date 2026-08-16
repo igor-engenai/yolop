@@ -35,6 +35,10 @@ from .terminal import InlineTerminal, SelectionOption
 
 _LOGGER = logging.getLogger(__name__)
 _SESSION_LOCK_TIMEOUT = 30.0
+_HELP_TEXT = (
+    "Commands: /new  /resume  /help  /quit\n"
+    "Scroll: PageUp/PageDown or mouse wheel · End: newest output"
+)
 
 
 async def run_tui[DepsT](
@@ -84,7 +88,7 @@ async def run_tui[DepsT](
         if active_turn is None:
             submissions.put_nowait(text)
         elif command == "/help":
-            transcript.add_notice("Commands: /new  /resume  /help  /quit")
+            transcript.add_notice(_HELP_TEXT)
             render_transcript()
         elif command.startswith("/"):
             transcript.add_error("Cancel the active run before changing sessions")
@@ -148,7 +152,7 @@ async def run_tui[DepsT](
                     refresh_status()
                 continue
             if command == "/help":
-                transcript.add_notice("Commands: /new  /resume  /help  /quit")
+                transcript.add_notice(_HELP_TEXT)
                 render_transcript()
                 continue
             if command.startswith("/"):

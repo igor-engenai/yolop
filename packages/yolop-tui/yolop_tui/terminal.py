@@ -13,6 +13,7 @@ from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import HSplit, Layout, VSplit, Window
 from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl, UIContent, UIControl
 from prompt_toolkit.layout.dimension import Dimension
+from prompt_toolkit.mouse_events import MouseEvent, MouseEventType
 from prompt_toolkit.styles import Style
 
 
@@ -47,6 +48,7 @@ class InlineTerminal:
         self._on_toggle_thinking = on_toggle_thinking or (lambda: None)
         self._transcript: AnyFormattedText = ""
         self._transcript_lines = 0
+        self._transcript_scroll = 0
         self._status = ""
         self._selection: _Selection | None = None
         self._ready = asyncio.Event()
@@ -62,7 +64,11 @@ class InlineTerminal:
 
     async def run(self) -> None:
         self._ready.set()
-        await self._application.run_async()
+        try:
+            await self._application.run_async()
+        finally:
+            self._application.output.disable_mouse_support()
+            self._application.output.flush()
 
     async def wait_until_ready(self) -> None:
         await self._ready.wait()
@@ -88,9 +94,16 @@ class InlineTerminal:
         return self._application.output.get_size().columns
 
     def set_transcript(self, text: AnyFormattedText) -> None:
+        previous_lines = self._transcript_lines
         self._transcript = text
         plain = fragment_list_to_text(to_formatted_text(text))
         self._transcript_lines = plain.count("\n") + bool(plain)
+        if self._transcript_scroll:
+            self._transcript_scroll += max(0, self._transcript_lines - previous_lines)
+            self._transcript_scroll = min(
+                self._transcript_scroll,
+                self._max_transcript_scroll(),
+            )
         self._application.invalidate()
 
     def set_status(self, text: str) -> None:
@@ -129,6 +142,18 @@ class InlineTerminal:
         def newline(_event) -> None:
             if self._selection is None:
                 self._buffer.insert_text("\n")
+
+        @bindings.add("pageup")
+        def transcript_page_up(_event) -> None:
+            self._scroll_transcript(self._transcript_page_size())
+
+        @bindings.add("pagedown")
+        def transcript_page_down(_event) -> None:
+            self._scroll_transcript(-self._transcript_page_size())
+
+        @bindings.add("end")
+        def transcript_end(_event) -> None:
+            self._scroll_transcript_to_bottom()
 
         @bindings.add("up")
         def up(_event) -> None:
@@ -177,16 +202,15 @@ class InlineTerminal:
 
         transcript = Window(
             content=FormattedTextControl(
-                lambda: self._transcript,
-                get_cursor_position=lambda: Point(
-                    x=0,
-                    y=max(0, self._transcript_lines - 1),
-                ),
+                self._transcript_fragments,
+                get_cursor_position=self._transcript_cursor_position,
             ),
             height=self._transcript_height,
             wrap_lines=True,
+            get_vertical_scroll=self._transcript_vertical_scroll,
             always_hide_cursor=True,
         )
+        self._transcript_window = transcript
         selector = Window(
             content=FormattedTextControl(self._selection_fragments),
             height=self._selection_height,
@@ -229,11 +253,61 @@ class InlineTerminal:
                 }
             ),
             full_screen=False,
+            mouse_support=True,
             erase_when_done=False,
         )
         application.timeoutlen = 0.1
         application.ttimeoutlen = 0.1
         return application
+
+    def _transcript_fragments(self) -> AnyFormattedText:
+        return [
+            (style, text, self._handle_transcript_mouse)
+            for style, text, *_rest in to_formatted_text(self._transcript)
+        ]
+
+    def _handle_transcript_mouse(
+        self,
+        mouse_event: MouseEvent,
+    ) -> object:
+        if mouse_event.event_type == MouseEventType.SCROLL_UP:
+            self._scroll_transcript(1)
+            return None
+        if mouse_event.event_type == MouseEventType.SCROLL_DOWN:
+            self._scroll_transcript(-1)
+            return None
+        return NotImplemented
+
+    def _transcript_cursor_position(self) -> Point:
+        if not self._transcript_scroll:
+            return Point(x=0, y=max(0, self._transcript_lines - 1))
+        return Point(x=0, y=self._transcript_vertical_scroll(self._transcript_window))
+
+    def _transcript_vertical_scroll(self, _window: Window) -> int:
+        return max(
+            0,
+            self._transcript_lines - self._transcript_page_size() - self._transcript_scroll,
+        )
+
+    def _transcript_page_size(self) -> int:
+        render_info = self._transcript_window.render_info
+        if render_info is not None:
+            return max(1, render_info.window_height)
+        return max(1, self._application.output.get_size().rows - 4)
+
+    def _max_transcript_scroll(self) -> int:
+        return max(0, self._transcript_lines - self._transcript_page_size())
+
+    def _scroll_transcript(self, lines: int) -> None:
+        self._transcript_scroll = min(
+            self._max_transcript_scroll(),
+            max(0, self._transcript_scroll + lines),
+        )
+        self._application.invalidate()
+
+    def _scroll_transcript_to_bottom(self) -> None:
+        self._transcript_scroll = 0
+        self._application.invalidate()
 
     def _transcript_height(self) -> Dimension:
         return Dimension(
