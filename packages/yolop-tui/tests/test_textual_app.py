@@ -1,7 +1,7 @@
 from rich.text import Text
 from textual import events
 from textual.containers import VerticalScroll
-from textual.widgets import Static, TextArea
+from textual.widgets import OptionList, Static, TextArea
 from yolop_tui.textual_app import TextualTerminal
 
 
@@ -24,6 +24,106 @@ async def test_textual_terminal_mounts_minimal_layout_and_submits_prompt() -> No
 
         assert submitted == ["hello"]
         assert editor.text == ""
+
+
+async def test_textual_editor_supports_multiline_input_and_prompt_history() -> None:
+    submitted: list[str] = []
+    terminal = TextualTerminal(on_submit=submitted.append)
+
+    async with terminal.app.run_test(size=(80, 24)) as pilot:
+        editor = terminal.app.query_one("#editor", TextArea)
+
+        await pilot.press("f", "i", "r", "s", "t", "enter")
+        await pilot.press("l", "i", "n", "e", "1", "shift+enter", "l", "i", "n", "e", "2", "enter")
+        await pilot.press("up")
+        await pilot.pause()
+
+        assert submitted == ["first", "line1\nline2"]
+        assert editor.text == "line1\nline2"
+
+        editor.clear()
+        await pilot.press("a", "ctrl+j", "b", "enter")
+        await pilot.pause()
+        assert submitted[-1] == "a\nb"
+
+        await pilot.press("t", "o", "p", "ctrl+j", "b", "o", "t", "t", "o", "m")
+        await pilot.press("up", "X", "enter")
+        await pilot.pause()
+        assert submitted[-1] == "topX\nbottom"
+
+
+async def test_textual_editor_interrupt_and_toggle_keys_are_context_sensitive() -> None:
+    cancelled = 0
+    toggled_tools = 0
+    toggled_thinking = 0
+
+    def cancel() -> bool:
+        nonlocal cancelled
+        cancelled += 1
+        return True
+
+    def toggle_tools() -> None:
+        nonlocal toggled_tools
+        toggled_tools += 1
+
+    def toggle_thinking() -> None:
+        nonlocal toggled_thinking
+        toggled_thinking += 1
+
+    terminal = TextualTerminal(
+        on_submit=lambda _text: None,
+        on_cancel=cancel,
+        on_toggle_tools=toggle_tools,
+        on_toggle_thinking=toggle_thinking,
+    )
+
+    async with terminal.app.run_test(size=(80, 24)) as pilot:
+        editor = terminal.app.query_one("#editor", TextArea)
+        await pilot.press("d", "i", "s", "c", "a", "r", "d", "ctrl+c")
+        await pilot.press("ctrl+c", "escape", "ctrl+o", "ctrl+t")
+        await pilot.pause()
+
+        assert editor.text == ""
+        assert cancelled == 2
+        assert toggled_tools == 1
+        assert toggled_thinking == 1
+        assert terminal.app.is_running
+
+
+async def test_textual_editor_completes_commands_and_project_files(tmp_path) -> None:
+    source = tmp_path / "src" / "answer.py"
+    source.parent.mkdir()
+    source.write_text("ANSWER = 42\n")
+    terminal = TextualTerminal(on_submit=lambda _text: None, cwd=tmp_path)
+
+    async with terminal.app.run_test(size=(80, 24)) as pilot:
+        editor = terminal.app.query_one("#editor", TextArea)
+        completions = terminal.app.query_one("#completions", OptionList)
+
+        await pilot.press("/", "r")
+        await pilot.pause()
+        assert completions.option_count == 1
+        await pilot.press("tab")
+        await pilot.pause()
+        assert editor.text == "/resume"
+
+        editor.clear()
+        await pilot.press("@", "s", "r", "a")
+        await pilot.pause()
+        assert completions.option_count == 1
+        await pilot.press("tab")
+        await pilot.pause()
+        assert editor.text == "@src/answer.py"
+
+
+async def test_textual_ctrl_c_and_ctrl_d_exit_when_idle_and_empty() -> None:
+    for key in ("ctrl+c", "ctrl+d"):
+        terminal = TextualTerminal(on_submit=lambda _text: None, on_cancel=lambda: False)
+
+        async with terminal.app.run_test(size=(80, 24)) as pilot:
+            await pilot.press(key)
+            await pilot.pause()
+            assert not terminal.app.is_running
 
 
 async def test_textual_transcript_scrolls_and_follows_only_at_bottom() -> None:
