@@ -515,6 +515,7 @@ class _ActiveTurn:
         self._context.cancel()
 
     def restore_undelivered(self) -> None:
-        self._terminal.restore_editor_text("\n\n".join(self._pending.values()))
-        self._pending.clear()
-        self._on_change()
+        if self._pending:
+            self._terminal.restore_editor_text("\n\n".join(self._pending.values()))
+            self._pending.clear()
+            self._on_change()
