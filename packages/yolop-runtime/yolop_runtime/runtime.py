@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
@@ -10,9 +10,11 @@ from uuid import uuid4
 from pydantic import TypeAdapter
 from pydantic_ai import AgentSpec, AgentStreamEvent
 from pydantic_ai.agent import EventStreamHandler
+from pydantic_ai.capabilities import AbstractCapability
 from pydantic_ai.exceptions import RunCancelled
 from pydantic_ai.messages import ModelMessage, ModelResponse, UserContent
 from pydantic_ai.models import KnownModelName, Model
+from pydantic_ai.tools import DeferredToolResults, ToolApproved, ToolDenied
 from pydantic_ai.usage import UsageLimits
 
 from yolop import ProviderCatalog, Yolop
@@ -260,6 +262,9 @@ class Runtime[HostDepsT]:
         model_id: str | None = None,
         execution_pin: ExecutionPin | None = None,
         usage_limits: UsageLimits | None = None,
+        output_type: Any = str,
+        deferred_tool_results: DeferredToolResults | None = None,
+        mandatory_capabilities: Sequence[AbstractCapability[Any]] = (),
         root_budget: RuntimeBudget | None = None,
         parent_run_id: str | None = None,
         relation: RunRelation | None = None,
@@ -312,6 +317,9 @@ class Runtime[HostDepsT]:
             deps=deps,
             deps_type=deps_type,
             usage_limits=usage_limits,
+            output_type=output_type,
+            deferred_tool_results=deferred_tool_results,
+            mandatory_capabilities=mandatory_capabilities,
             event_sink=event_sink,
             context_sink=context_sink,
             follow_up_sink=follow_up_sink,
@@ -330,6 +338,9 @@ class Runtime[HostDepsT]:
         deps: HostDepsT,
         deps_type: type[HostDepsT],
         usage_limits: UsageLimits | None = None,
+        output_type: Any = str,
+        deferred_tool_results: DeferredToolResults | None = None,
+        mandatory_capabilities: Sequence[AbstractCapability[Any]] = (),
         event_sink: RuntimeEventSink | None = None,
         context_sink: RuntimeContextSink | None = None,
         follow_up_sink: RuntimeFollowUpSink | None = None,
@@ -418,6 +429,9 @@ class Runtime[HostDepsT]:
                         model=model,
                         message_history=base_active_messages,
                         usage_limits=usage_limits,
+                        output_type=output_type,
+                        deferred_tool_results=deferred_tool_results,
+                        mandatory_capabilities=mandatory_capabilities,
                     )
                     if root_deadline is None:
                         result = await execute
@@ -554,6 +568,53 @@ class Runtime[HostDepsT]:
         )
         session = await self.store.load_session(namespace, run.session_id)
         return RunCompletion(session=session, run=run)
+
+    async def resume_deferred_run(
+        self,
+        namespace: str,
+        session_id: str,
+        run_id: str,
+        *,
+        approvals: Mapping[str, bool | ToolApproved | ToolDenied],
+        spec: AgentSpec | dict[str, Any],
+        model: Model | KnownModelName | str | None = None,
+        model_id: str | None = None,
+        execution_pin: ExecutionPin | None = None,
+        deps: HostDepsT,
+        deps_type: type[HostDepsT],
+        output_type: Any = str,
+        mandatory_capabilities: Sequence[AbstractCapability[Any]] = (),
+        idempotency_key: str,
+        event_sink: RuntimeEventSink | None = None,
+        context_sink: RuntimeContextSink | None = None,
+        follow_up_sink: RuntimeFollowUpSink | None = None,
+    ) -> RunCompletion:
+        """Resume a deferred tool Run through native Pydantic AI results."""
+        pending = await self.store.load_run(namespace, run_id)
+        if pending.session_id != session_id:
+            raise RunStateError(f"Run {run_id!r} belongs to another Session")
+        if pending.status not in _TERMINAL_STATUSES:
+            raise RunStateError(f"Run {run_id!r} is not terminal")
+        return await self.run_related(
+            namespace,
+            session_id,
+            None,
+            parent_run_id=run_id,
+            relation=RunRelation.CONTINUATION,
+            spec=spec,
+            model=model,
+            model_id=model_id,
+            execution_pin=execution_pin,
+            deps=deps,
+            deps_type=deps_type,
+            output_type=output_type,
+            deferred_tool_results=DeferredToolResults(approvals=dict(approvals)),
+            mandatory_capabilities=mandatory_capabilities,
+            idempotency_key=idempotency_key,
+            event_sink=event_sink,
+            context_sink=context_sink,
+            follow_up_sink=follow_up_sink,
+        )
 
     async def run_related(
         self,

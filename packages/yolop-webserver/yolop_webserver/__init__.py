@@ -4,7 +4,7 @@ import asyncio
 import inspect
 import json
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -15,6 +15,7 @@ from fastapi import FastAPI, Header, Request
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 from pydantic_ai import AgentSpec
+from pydantic_ai.capabilities import AbstractCapability
 from pydantic_ai.messages import ModelMessagesTypeAdapter
 from pydantic_ai.models import KnownModelName, Model
 from pydantic_ai.usage import RunUsage
@@ -198,6 +199,7 @@ def create_app[DepsT](
     model_id: str | None = None,
     limits: RunLimits | None = None,
     provider_catalog: ProviderCatalog | None = None,
+    mandatory_capabilities: Sequence[AbstractCapability[Any]] = (),
 ) -> FastAPI:
     """Create a FastAPI application for one host-selected AgentSpec."""
     configured_limits = limits or RunLimits()
@@ -238,6 +240,7 @@ def create_app[DepsT](
                     model_id=pin.model_id,
                     deps=deps,
                     deps_type=deps_type,
+                    mandatory_capabilities=mandatory_capabilities,
                     cancel_on_task_cancel=False,
                 )
         except asyncio.CancelledError:

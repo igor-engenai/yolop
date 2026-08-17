@@ -6,7 +6,7 @@ import re
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from hashlib import sha256
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from pydantic_ai import ApprovalRequired
 from pydantic_ai.capabilities import AbstractCapability, CapabilityOrdering
@@ -15,6 +15,7 @@ from pydantic_ai.tools import (
     DeferredToolRequests,
     DeferredToolResults,
     RunContext,
+    ToolApproved,
     ToolDefinition,
     ToolDenied,
 )
@@ -138,7 +139,7 @@ class ToolPolicy(AbstractCapability[Any]):
         *,
         requests: DeferredToolRequests,
     ) -> DeferredToolResults | None:
-        approvals: dict[str, ToolDenied] = {}
+        approvals: dict[str, bool | ToolApproved | ToolDenied] = {}
         for call in requests.approvals:
             metadata = requests.metadata.get(call.tool_call_id, {})
             policy = metadata.get("yolop_policy")
@@ -178,7 +179,9 @@ async def _call_decision(
     if decision is None:
         return None
     result = decision(context)
-    return await result if inspect.isawaitable(result) else result
+    if inspect.isawaitable(result):
+        return cast(str | None, await result)
+    return result
 
 
 async def _call_rewrite(
@@ -188,7 +191,9 @@ async def _call_rewrite(
     if rewrite is None:
         return None
     result = rewrite(context)
-    return await result if inspect.isawaitable(result) else result
+    if inspect.isawaitable(result):
+        return cast(Mapping[str, Any] | None, await result)
+    return result
 
 
 def _validate_rewrite(

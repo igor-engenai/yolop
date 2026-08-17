@@ -6,6 +6,7 @@ from typing import Any
 from uuid import uuid4
 
 from pydantic_ai import AgentSpec, AgentStreamEvent, EnqueuedMessagesEvent, RunContext
+from pydantic_ai.capabilities import AbstractCapability
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
@@ -63,6 +64,7 @@ async def run_tui[DepsT](
     session_id: str | None = None,
     cwd: Path | None = None,
     provider_catalog: ProviderCatalog | None = None,
+    mandatory_capabilities: Sequence[AbstractCapability[Any]] = (),
 ) -> None:
     """Run the full-screen Textual host until the user exits."""
     runtime = Runtime(store=store, provider_catalog=provider_catalog)
@@ -465,6 +467,7 @@ async def run_tui[DepsT](
                     set_active=set_active,
                     render_transcript=render_transcript,
                     refresh_status=refresh_status,
+                    mandatory_capabilities=mandatory_capabilities,
                 )
                 refresh_status()
             except asyncio.CancelledError:
@@ -515,6 +518,7 @@ async def _run_turn[DepsT](
     set_active: Callable[["_ActiveTurn | None"], None],
     render_transcript: Callable[[], None],
     refresh_status: Callable[[], None],
+    mandatory_capabilities: Sequence[AbstractCapability[Any]],
 ) -> RuntimeSessionSnapshot:
     active: _ActiveTurn | None = None
 
@@ -556,6 +560,7 @@ async def _run_turn[DepsT](
             idempotency_key=f"tui:{uuid4()}",
             event_sink=observer,
             context_sink=observer,
+            mandatory_capabilities=mandatory_capabilities,
         )
     finally:
         if active is not None:
