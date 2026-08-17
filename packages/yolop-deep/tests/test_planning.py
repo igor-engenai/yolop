@@ -8,7 +8,7 @@ from pydantic_ai import AgentSpec
 from pydantic_ai.messages import ModelMessage, ModelRequest, ToolReturnPart
 from pydantic_ai.models.function import DeltaToolCall, DeltaToolCalls, FunctionModel
 from pydantic_ai.models.test import TestModel
-from yolop_deep import Planning, SessionPlanStore
+from yolop_deep import PlanItem, Planning, SessionPlanStore
 from yolop_runtime import Runtime, ScopedStateContext
 from yolop_sqlite_session import SQLiteRuntimeStore
 
@@ -73,6 +73,35 @@ def _tool_then_text(name: str, arguments: dict[str, object], seen: list[str]) ->
         yield {0: DeltaToolCall(name=name, json_args=json.dumps(arguments), tool_call_id=name)}
 
     return FunctionModel(stream_function=respond, model_name="test")
+
+
+async def test_process_restart_preserves_the_session_plan(tmp_path: Path) -> None:
+    database = tmp_path / "runtime.db"
+    first_store = SQLiteRuntimeStore(database)
+    first_runtime = Runtime(store=first_store)
+    spec = AgentSpec(model="test:model")
+    session = await first_runtime.create_session("tenant", spec=spec, model_id="test:model")
+    first_plan = SessionPlanStore(
+        ScopedStateContext(
+            store=first_store,
+            namespace="tenant",
+            session_id=session.id,
+            run_id=session.id,
+        )
+    )
+    await first_plan.set_items([PlanItem(content="survive restart")])
+
+    reopened_store = SQLiteRuntimeStore(database)
+    reopened_plan = SessionPlanStore(
+        ScopedStateContext(
+            store=reopened_store,
+            namespace="tenant",
+            session_id=session.id,
+            run_id=session.id,
+        )
+    )
+
+    assert [item.content for item in await reopened_plan.get_items()] == ["survive restart"]
 
 
 async def test_later_run_reads_the_same_session_plan(tmp_path: Path) -> None:
