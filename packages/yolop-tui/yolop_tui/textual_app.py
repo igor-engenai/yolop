@@ -9,11 +9,12 @@ from rich.text import Text
 from textual import events
 from textual.app import App, AutopilotCallbackType, ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical, VerticalScroll
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Input, OptionList, Static, TextArea
+from textual.widgets import Button, Input, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
+from .auth import AuthProvider, AuthStatus, DeviceAuthorization
 from .selection import SelectionOption
 from .suggestions import PromptCompleter, PromptCompletion
 
@@ -176,6 +177,12 @@ class _SessionPicker(ModalScreen[str | None]):
         padding: 1;
     }
 
+    #picker-title {
+        width: 1fr;
+        height: 1;
+        text-style: bold;
+    }
+
     #session-filter {
         width: 1fr;
         height: 3;
@@ -188,14 +195,23 @@ class _SessionPicker(ModalScreen[str | None]):
     }
     """
 
-    def __init__(self, options: list[SelectionOption]) -> None:
+    def __init__(
+        self,
+        options: list[SelectionOption],
+        *,
+        title: str = "Resume session",
+        placeholder: str = "Filter sessions",
+    ) -> None:
         super().__init__()
         self._options = tuple(options)
         self._matches = self._options
+        self._title = title
+        self._placeholder = placeholder
 
     def compose(self) -> ComposeResult:
         yield Vertical(
-            Input(placeholder="Filter sessions", id="session-filter"),
+            Static(self._title, id="picker-title"),
+            Input(placeholder=self._placeholder, id="session-filter"),
             OptionList(id="session-options"),
             id="session-picker",
         )
@@ -239,6 +255,137 @@ class _SessionPicker(ModalScreen[str | None]):
         options.clear_options()
         options.add_options(Option(option.label, id=option.value) for option in self._matches)
         options.highlighted = 0 if self._matches else None
+
+
+class _DeviceLogin(ModalScreen[bool]):
+    BINDINGS = [
+        Binding("escape", "cancel", priority=True),
+        Binding("ctrl+c", "cancel", priority=True),
+    ]
+    CSS = """
+    _DeviceLogin {
+        align: center middle;
+        background: $background 70%;
+    }
+
+    #auth-login {
+        width: 80%;
+        height: auto;
+        min-height: 10;
+        border: round ansi_bright_black;
+        background: $surface;
+        padding: 1 2;
+    }
+
+    #auth-provider {
+        text-style: bold;
+    }
+
+    #auth-code {
+        text-style: bold;
+        color: cyan;
+        margin: 1 0;
+    }
+
+    #auth-cancel {
+        margin-top: 1;
+    }
+    """
+
+    def __init__(self, provider_label: str) -> None:
+        super().__init__()
+        self._provider_label = provider_label
+
+    def compose(self) -> ComposeResult:
+        yield Vertical(
+            Static(self._provider_label, id="auth-provider"),
+            Static("Requesting a device code...", id="auth-progress"),
+            Static("", id="auth-uri"),
+            Static("", id="auth-code"),
+            Button("Cancel", id="auth-cancel"),
+            id="auth-login",
+        )
+
+    def on_mount(self) -> None:
+        self.query_one("#auth-cancel", Button).focus()
+
+    def show_authorization(self, authorization: DeviceAuthorization) -> None:
+        uri = Text(authorization.verification_uri)
+        uri.stylize(f"link {authorization.verification_uri}")
+        self.query_one("#auth-uri", Static).update(uri)
+        self.query_one("#auth-code", Static).update(f"Code: {authorization.user_code}")
+        self.query_one("#auth-progress", Static).update("Waiting for authorization...")
+
+    def complete(self) -> None:
+        self.dismiss(True)
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "auth-cancel":
+            self.action_cancel()
+
+
+class _Confirmation(ModalScreen[bool]):
+    BINDINGS = [
+        Binding("escape", "reject", priority=True),
+        Binding("ctrl+c", "reject", priority=True),
+        Binding("n", "reject", priority=True),
+        Binding("y", "accept", priority=True),
+    ]
+    CSS = """
+    _Confirmation {
+        align: center middle;
+        background: $background 70%;
+    }
+
+    #confirmation {
+        width: 70%;
+        height: auto;
+        min-height: 7;
+        border: round ansi_bright_black;
+        background: $surface;
+        padding: 1 2;
+    }
+
+    #confirm-actions {
+        width: 1fr;
+        height: 3;
+        margin-top: 1;
+    }
+
+    #confirm-yes, #confirm-no {
+        width: 1fr;
+    }
+    """
+
+    def __init__(self, message: str) -> None:
+        super().__init__()
+        self._message = message
+
+    def compose(self) -> ComposeResult:
+        yield Vertical(
+            Static(self._message, id="confirm-message"),
+            Horizontal(
+                Button("Log out", id="confirm-yes", variant="error"),
+                Button("Cancel", id="confirm-no"),
+                id="confirm-actions",
+            ),
+            id="confirmation",
+        )
+
+    def on_mount(self) -> None:
+        self.query_one("#confirm-no", Button).focus()
+
+    def action_accept(self) -> None:
+        self.dismiss(True)
+
+    def action_reject(self) -> None:
+        self.dismiss(False)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id == "confirm-yes")
 
 
 class _YolopTextualApp(App[None]):
@@ -464,7 +611,69 @@ class TextualTerminal:
     async def wait_until_ready(self) -> None:
         await self._ready.wait()
 
-    async def choose(self, options: list[SelectionOption]) -> str | None:
+    async def confirm(self, message: str) -> bool:
+        future: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
+
+        def selected(value: bool) -> None:
+            if not future.done():
+                future.set_result(value)
+
+        if not self.app.call_later(self.app.push_screen, _Confirmation(message), selected):
+            raise RuntimeError("cannot open confirmation after the TUI has stopped")
+        return await future
+
+    async def login_auth_provider(self, provider: AuthProvider) -> AuthStatus | None:
+        screen = _DeviceLogin(provider.label)
+        screen_result: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
+
+        def dismissed(completed: bool) -> None:
+            if not screen_result.done():
+                screen_result.set_result(completed)
+
+        if not self.app.call_later(self.app.push_screen, screen, dismissed):
+            raise RuntimeError("cannot open provider login after the TUI has stopped")
+
+        def notify(authorization: DeviceAuthorization) -> None:
+            self.app.call_later(screen.show_authorization, authorization)
+
+        login = asyncio.create_task(provider.login(notify), name=f"yolop-login-{provider.name}")
+        done, _pending = await asyncio.wait(
+            {screen_result, login},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if screen_result in done:
+            login.cancel()
+            await asyncio.gather(login, return_exceptions=True)
+            return None
+        try:
+            status = await login
+        except BaseException:
+            self.app.call_later(screen.complete)
+            await screen_result
+            raise
+        self.app.call_later(screen.complete)
+        await screen_result
+        return status
+
+    async def choose_auth_provider(
+        self,
+        providers: list[AuthProvider],
+        *,
+        action: str = "Log in",
+    ) -> str | None:
+        return await self.choose(
+            [SelectionOption(provider.name, provider.label) for provider in providers],
+            title=f"{action} with a provider",
+            placeholder="Filter providers",
+        )
+
+    async def choose(
+        self,
+        options: list[SelectionOption],
+        *,
+        title: str = "Resume session",
+        placeholder: str = "Filter sessions",
+    ) -> str | None:
         future: asyncio.Future[str | None] = asyncio.get_running_loop().create_future()
 
         def selected(value: str | None) -> None:
@@ -473,7 +682,7 @@ class TextualTerminal:
 
         scheduled = self.app.call_later(
             self.app.push_screen,
-            _SessionPicker(options),
+            _SessionPicker(options, title=title, placeholder=placeholder),
             selected,
         )
         if not scheduled:

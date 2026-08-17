@@ -797,7 +797,10 @@ async def test_help_lists_only_the_minimal_commands(tmp_path: Path) -> None:
             )
             await _wait_for_output(output, "╭─ prompt")
             pipe_input.send_text("/help\r")
-            await _wait_for_output(output, "Commands: /new  /resume  /help  /quit")
+            await _wait_for_output(
+                output,
+                "Commands: /new  /resume  /login  /logout  /help  /quit",
+            )
             await _wait_for_output(output, "Scroll: PageUp/PageDown or mouse wheel")
             pipe_input.send_text("/quit\r")
             await asyncio.wait_for(running, timeout=1)

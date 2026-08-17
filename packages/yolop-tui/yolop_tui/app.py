@@ -37,7 +37,7 @@ _LOGGER = logging.getLogger(__name__)
 _SESSION_LOCK_TIMEOUT = 30.0
 _TERMINAL_FACTORY = TextualTerminal
 _HELP_TEXT = (
-    "Commands: /new  /resume  /help  /quit\n"
+    "Commands: /new  /resume  /login  /logout  /help  /quit\n"
     "Scroll: PageUp/PageDown or mouse wheel · End: newest output"
 )
 

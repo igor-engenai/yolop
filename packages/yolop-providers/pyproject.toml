@@ -20,5 +20,8 @@ yolop-providers = "yolop_providers.cli:main"
 [project.entry-points."yolop.model_providers"]
 openai-codex = "yolop_providers:create_codex_model"
 
+[project.entry-points."yolop.auth_providers"]
+openai-codex = "yolop_providers:CodexOAuth"
+
 [tool.hatch.build.targets.wheel]
 packages = ["yolop_providers"]

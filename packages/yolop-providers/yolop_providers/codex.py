@@ -51,6 +51,9 @@ class _DeviceCode:
 class CodexOAuth:
     """Own OpenAI Codex device login and credentials for one local YoloP user."""
 
+    name = _PROVIDER_NAME
+    label = "OpenAI Codex (ChatGPT Plus/Pro)"
+
     def __init__(
         self,
         *,
