@@ -42,6 +42,7 @@ dev = [
     "ruff>=0.16.3",
     "ty>=0.0.72",
     "yolop-duckdb",
+    "yolop-providers",
     "yolop-session",
     "yolop-sqlite-session",
     "yolop-tui",
@@ -56,6 +57,7 @@ package = true
 [tool.uv.sources]
 yolop = { workspace = true }
 yolop-duckdb = { workspace = true }
+yolop-providers = { workspace = true }
 yolop-session = { workspace = true }
 yolop-sqlite-session = { workspace = true }
 yolop-tui = { workspace = true }
@@ -66,6 +68,7 @@ yolop-workspace-session = { workspace = true }
 [tool.uv.workspace]
 members = [
     "packages/yolop-duckdb",
+    "packages/yolop-providers",
     "packages/yolop-session",
     "packages/yolop-sqlite-session",
     "packages/yolop-tui",
@@ -80,6 +83,7 @@ asyncio_mode = "auto"
 testpaths = [
     "tests",
     "packages/yolop-duckdb/tests",
+    "packages/yolop-providers/tests",
     "packages/yolop-session/tests",
     "packages/yolop-sqlite-session/tests",
     "packages/yolop-tui/tests",
