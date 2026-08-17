@@ -56,7 +56,9 @@ def test_distribution_publishes_current_entry_points() -> None:
         "yolop.capabilities": {
             "Context": "yolop_context:Context",
             "DuckDB": "yolop_duckdb:DuckDB",
+            "StuckLoop": "yolop_context:StuckLoop",
             "Skills": "yolop.skills:Skills",
+            "WarnNearLimits": "yolop_context:WarnNearLimits",
             "Workspace": "yolop_workspace:Workspace",
         },
         "yolop.model_providers": {
@@ -78,8 +80,11 @@ def test_public_package_imports_load() -> None:
         "yolop_context": (
             "Context",
             "ContextDeps",
+            "StuckLoop",
+            "StuckLoopError",
             "ScopedOverflowStore",
             "TranscriptHandle",
+            "WarnNearLimits",
         ),
         "yolop_duckdb": ("DuckDB", "DuckDBDeps"),
         "yolop_providers": ("CodexOAuth", "create_codex_model"),

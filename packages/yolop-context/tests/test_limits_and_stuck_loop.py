@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from pydantic_ai import ModelRetry
-from pydantic_ai.messages import ToolCallPart
+from pydantic_ai.messages import ModelRequest, ToolCallPart, UserPromptPart
+from pydantic_ai.models import ModelRequestContext, ModelRequestParameters
 from pydantic_ai.models.test import TestModel
 from pydantic_ai.tools import RunContext, ToolDefinition
 from pydantic_ai.usage import RunUsage
@@ -28,11 +28,23 @@ def _definition(name: str) -> ToolDefinition:
     return ToolDefinition(name=name)
 
 
+def test_limit_adapters_reject_non_serialized_or_unknown_arguments() -> None:
+    with pytest.raises(ValueError, match="unsupported"):
+        WarnNearLimits.from_spec(model="secret")
+    with pytest.raises(ValueError, match="serialized"):
+        StuckLoop.from_spec(ignored_tools=[object()])
+
+
 @pytest.mark.asyncio
 async def test_warn_near_limits_injects_only_after_the_threshold() -> None:
     capability = WarnNearLimits(max_iterations=10, warning_threshold=0.5)
     ctx = _context()
-    request = SimpleNamespace(messages=[], model=TestModel(), model_request_parameters=None)
+    request = ModelRequestContext(
+        messages=[],
+        model=TestModel(),
+        model_settings=None,
+        model_request_parameters=ModelRequestParameters(),
+    )
 
     ctx.usage.requests = 4
     await capability.before_model_request(ctx, request)
@@ -40,7 +52,12 @@ async def test_warn_near_limits_injects_only_after_the_threshold() -> None:
 
     ctx.usage.requests = 5
     await capability.before_model_request(ctx, request)
-    assert "[WarnNearLimits]" in request.messages[-1].parts[0].content
+    message = request.messages[-1]
+    assert isinstance(message, ModelRequest)
+    part = message.parts[0]
+    assert isinstance(part, UserPromptPart)
+    assert isinstance(part.content, str)
+    assert "[WarnNearLimits]" in part.content
 
 
 @pytest.mark.asyncio
@@ -103,7 +120,7 @@ async def test_stuck_loop_repeated_results_trigger_terminal_error_without_result
 
 @pytest.mark.asyncio
 async def test_ignored_tools_do_not_trigger_and_each_run_gets_fresh_state() -> None:
-    capability = StuckLoop(repeat_threshold=2, ignored_tools=("poll",))
+    capability = StuckLoop(repeat_threshold=3, ignored_tools=("poll",))
     ctx = _context()
     call = _call("poll")
     definition = _definition("poll")
