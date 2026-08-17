@@ -240,6 +240,12 @@ messages = run.all_messages()
 
 YoloP returns Pydantic AI's native `AgentRunEvents` handle. It does not wrap events, results, or messages. `Yolop.execute(...)` is the run-to-completion form for hosts that need Pydantic AI's native event handler and `RunContext`, including steering and cancellation. Hosts that need durable sessions and runs use `yolop_runtime.Runtime` above this stateless kernel.
 
+## Host-enforced Runtime policy
+
+Hosts can pass mandatory Pydantic AI capabilities to `Yolop.execute(...)`, `yolop_runtime.Runtime`, `run_tui(...)`, and `yolop_webserver.create_app(...)`. These capabilities are resolved separately from AgentSpec selections and cannot be silently replaced by AgentSpec configuration.
+
+Use `yolop.ToolPolicy` for host-owned tool decisions. It supports bounded argument rewrites, stable denials, native deferred approvals, and redacted audit records. A host resumes an approval through `Runtime.resume_deferred_run(...)`; the continuation remains a normal durable Run and uses Pydantic AI's native `DeferredToolResults`.
+
 ## Packages
 
 ### `yolop`
