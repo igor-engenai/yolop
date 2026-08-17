@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 from pydantic_ai import AgentSpec
+from pydantic_ai.messages import ModelMessage
+from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.models.test import TestModel
 from yolop_deep import GoalRunner, GoalStatus
 from yolop_runtime import RunRelation, Runtime, RuntimeBudget
@@ -86,6 +89,40 @@ async def test_impossible_goal_stops_with_reason(tmp_path: Path) -> None:
     assert record.status is GoalStatus.IMPOSSIBLE
     assert record.reason == "service is offline"
     assert len(await runtime.list_runs("tenant", session_id=session.id)) == 2
+
+
+async def test_evaluator_failure_continues_within_the_goal_budget(tmp_path: Path) -> None:
+    async def fail(_messages: list[ModelMessage], _info: AgentInfo) -> AsyncIterator[str]:
+        raise RuntimeError("evaluator unavailable")
+        yield "unreachable"
+
+    store = SQLiteRuntimeStore(tmp_path / "runtime.db")
+    runtime = Runtime(store=store)
+    work_spec = AgentSpec(model="test:model")
+    evaluator_spec = AgentSpec(model="test:evaluator", instructions="Return a verdict.")
+    session = await runtime.create_session("tenant", spec=work_spec, model_id="test:model")
+
+    record = await GoalRunner(runtime).start(
+        "tenant",
+        session.id,
+        goal="Keep trying.",
+        spec=work_spec,
+        model=TestModel(custom_output_text="attempted"),
+        model_id="test:model",
+        evaluator_spec=evaluator_spec,
+        evaluator_model=FunctionModel(stream_function=fail),
+        evaluator_model_id="test:evaluator",
+        deps=None,
+        deps_type=type(None),
+        budget=RuntimeBudget(request_limit=10, child_run_limit=5, continuation_limit=3),
+        max_turns=2,
+    )
+
+    assert record.status is GoalStatus.ACTIVE
+    assert "evaluator failed" in record.reason
+    runs = await runtime.list_runs("tenant", session_id=session.id)
+    assert len(runs) == 3
+    assert runs[1].status.value == "failed"
 
 
 async def test_unmet_goal_schedules_one_related_continuation(tmp_path: Path) -> None:
