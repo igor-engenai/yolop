@@ -38,15 +38,21 @@ from . import (
     RuntimeRunSnapshot,
     RuntimeSessionSnapshot,
     RuntimeStore,
+    RunTreeNode,
     ScopedStateContext,
+    SessionConflictError,
     SessionLockTimeoutError,
     SessionPinMismatchError,
+    StateFormatError,
     canonical_turn_messages,
     ensure_session_pin,
 )
 
 _STREAM_EVENT_ADAPTER = TypeAdapter(AgentStreamEvent)
 _TERMINAL_STATUSES = frozenset({RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.INTERRUPTED})
+_RUN_LABEL_OWNER = "yolop.runtime.history"
+_RUN_LABEL_STATE_KIND = "labels"
+_RUN_LABEL_SCHEMA_VERSION = 1
 
 
 class Runtime[HostDepsT]:
@@ -580,6 +586,95 @@ class Runtime[HostDepsT]:
     ) -> list[RuntimeRunSnapshot]:
         return await self.store.list_runs(namespace, session_id=session_id)
 
+    async def set_run_label(
+        self,
+        namespace: str,
+        session_id: str,
+        run_id: str,
+        label: str | None,
+    ) -> dict[str, str]:
+        """Set or remove a Session-scoped label without mutating the Run."""
+        run = await self.store.load_run(namespace, run_id)
+        if run.session_id != session_id:
+            raise RunStateError(f"Run {run_id!r} belongs to another Session")
+        state = ScopedStateContext(
+            store=self.store,
+            namespace=namespace,
+            session_id=session_id,
+            run_id=run_id,
+        ).for_session(_RUN_LABEL_OWNER)
+        entries = await state.read(_RUN_LABEL_STATE_KIND, schema_version=_RUN_LABEL_SCHEMA_VERSION)
+        labels: dict[str, str] = {}
+        if entries:
+            payload = entries[-1].payload
+            if not isinstance(payload, dict) or not isinstance(payload.get("labels"), dict):
+                raise StateFormatError("Stored Run labels have an invalid snapshot")
+            labels = {str(key): str(value) for key, value in payload["labels"].items()}
+        if label is None:
+            labels.pop(run_id, None)
+        else:
+            if not label.strip():
+                raise ValueError("Run label must not be empty")
+            labels[run_id] = label.strip()
+        expected_sequence = entries[-1].sequence if entries else 0
+        await state.append(
+            _RUN_LABEL_STATE_KIND,
+            {"labels": labels},
+            schema_version=_RUN_LABEL_SCHEMA_VERSION,
+            expected_sequence=expected_sequence,
+        )
+        return labels
+
+    async def list_run_labels(self, namespace: str, *, session_id: str) -> dict[str, str]:
+        """Return all labels owned by one Session."""
+        await self.store.load_session(namespace, session_id)
+        state = ScopedStateContext(
+            store=self.store,
+            namespace=namespace,
+            session_id=session_id,
+            run_id=session_id,
+        ).for_session(_RUN_LABEL_OWNER)
+        entries = await state.read(_RUN_LABEL_STATE_KIND, schema_version=_RUN_LABEL_SCHEMA_VERSION)
+        if not entries:
+            return {}
+        payload = entries[-1].payload
+        if not isinstance(payload, dict) or not isinstance(payload.get("labels"), dict):
+            raise StateFormatError("Stored Run labels have an invalid snapshot")
+        return {str(key): str(value) for key, value in payload["labels"].items()}
+
+    async def list_run_tree(
+        self,
+        namespace: str,
+        *,
+        session_id: str,
+    ) -> tuple[RunTreeNode, ...]:
+        """Return immutable Session Run roots with stable depth-first children."""
+        runs = await self.list_runs(namespace, session_id=session_id)
+        by_id = {run.id: run for run in runs}
+        children: dict[str, list[RuntimeRunSnapshot]] = {}
+        for run in runs:
+            if run.parent_run_id in by_id:
+                assert run.parent_run_id is not None
+                children.setdefault(run.parent_run_id, []).append(run)
+        for descendants in children.values():
+            descendants.sort(key=lambda run: (run.created_at, run.id))
+        labels = await self.list_run_labels(namespace, session_id=session_id)
+        session = await self.store.load_session(namespace, session_id)
+
+        def build(run: RuntimeRunSnapshot) -> RunTreeNode:
+            return RunTreeNode(
+                run=run,
+                children=tuple(build(child) for child in children.get(run.id, [])),
+                label=labels.get(run.id),
+                selected=run.id == session.head_run_id,
+            )
+
+        roots = sorted(
+            (run for run in runs if run.parent_run_id not in by_id),
+            key=lambda run: (run.created_at, run.id),
+        )
+        return tuple(build(root) for root in roots)
+
     async def list_run_events(
         self,
         namespace: str,
@@ -607,6 +702,37 @@ class Runtime[HostDepsT]:
             run_id,
             expected_revision=expected_revision,
         )
+
+    async def fork_session(
+        self,
+        namespace: str,
+        session_id: str,
+        run_id: str,
+        *,
+        expected_revision: str,
+    ) -> RuntimeSessionSnapshot:
+        """Create a pinned Session starting at a terminal Run's active history."""
+        await self.store.load_session(namespace, session_id)
+        selected = await self.store.load_run(namespace, run_id)
+        if selected.session_id != session_id:
+            raise RunStateError(f"Run {run_id!r} belongs to another Session")
+        if selected.status not in _TERMINAL_STATUSES:
+            raise RunStateError(f"Run {run_id!r} is not terminal")
+        async with self.store.lock_session(
+            namespace,
+            session_id,
+            timeout=self.session_lock_timeout,
+        ):
+            current = await self.store.load_session(namespace, session_id)
+            if current.revision != expected_revision:
+                raise SessionConflictError(f"Session {session_id!r} has changed")
+            fork = await self.store.create_session(namespace, pin=current.pin)
+            return await self.store.replace_session(
+                namespace,
+                fork.id,
+                expected_revision=fork.revision,
+                messages=selected.active_messages,
+            )
 
     async def _terminal_completion(self, namespace: str, run_id: str) -> RunCompletion:
         run = await self.store.load_run(namespace, run_id)

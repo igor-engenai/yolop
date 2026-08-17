@@ -380,6 +380,16 @@ class RuntimeRunSnapshot:
 
 
 @dataclass(frozen=True)
+class RunTreeNode:
+    """One immutable Run tree node for history navigation."""
+
+    run: RuntimeRunSnapshot
+    children: tuple["RunTreeNode", ...] = ()
+    label: str | None = None
+    selected: bool = False
+
+
+@dataclass(frozen=True)
 class RunReservation:
     """Result of idempotent run submission."""
 
@@ -783,6 +793,7 @@ __all__ = [
     "RunStatus",
     "RuntimeRunSnapshot",
     "RuntimeSessionSnapshot",
+    "RunTreeNode",
     "RuntimeBudget",
     "RuntimeDeadlineExceededError",
     "RuntimeDeps",
