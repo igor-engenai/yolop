@@ -1,0 +1,53 @@
+model: openai:gpt-5.6-luna
+name: deep-coding
+description: A durable deep coding agent with workspace tools, context control, and planning.
+instructions: |
+  You are a deep coding agent.
+  Inspect the relevant files before changing them.
+  Keep the durable plan current for multi-step work.
+  Make the smallest change that fully meets the request.
+  Verify the result with the available tools.
+model_settings:
+  thinking: high
+capabilities:
+  - Context: {}
+  - Compaction:
+      target_tokens: 12000
+      keep_tool_pairs: 3
+      file_tools:
+        - read_file
+      include_summarizer: true
+      receipts: true
+      incremental: true
+  - Planning:
+      enable_subtasks: true
+      tools:
+        - write_plan
+        - read_plan
+        - add_task
+        - update_task_status
+        - update_task_statuses
+        - remove_task
+        - add_subtask
+        - set_dependency
+        - get_available_tasks
+  - StuckLoop: {}
+  - WarnNearLimits: {}
+  - Workspace:
+      shell: true
+      allowed_commands:
+        - git
+        - rg
+        - grep
+        - find
+        - ls
+        - cat
+        - sed
+        - head
+        - tail
+        - python
+        - uv
+        - pytest
+        - ruff
+        - ty
+        - just

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from importlib.resources import as_file, files
 from typing import Any, Literal
 
+from pydantic_ai import AgentSpec
 from pydantic_ai.tools import RunContext
 from pydantic_ai_harness.planning import (
     PlanItem,
@@ -19,6 +21,8 @@ from yolop_runtime import (
     ScopedState,
     ScopedStateContext,
 )
+
+from yolop import ProviderCatalog
 
 _PLAN_OWNER = "yolop.deep.planning"
 _PLAN_STATE_KIND = "plan"
@@ -155,4 +159,19 @@ class Planning(HarnessPlanning[Any]):
         return "Planning"
 
 
-__all__ = ["PlanItem", "PlanStore", "Planning", "SessionPlanStore", "TaskStatus"]
+def load_deep_coding_spec(*, catalog: ProviderCatalog | None = None) -> AgentSpec:
+    """Load the explicit deep-coding preset after validating installed capabilities."""
+    with as_file(files("yolop_deep").joinpath("agent_specs/deep-coding.yaml")) as path:
+        spec = AgentSpec.from_file(path)
+    (catalog or ProviderCatalog.from_installed()).capability_types_for(spec)
+    return spec
+
+
+__all__ = [
+    "PlanItem",
+    "PlanStore",
+    "Planning",
+    "SessionPlanStore",
+    "TaskStatus",
+    "load_deep_coding_spec",
+]
