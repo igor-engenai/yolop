@@ -6,6 +6,7 @@ from pydantic_ai import Agent, AgentRunEvents, AgentRunResult, AgentSpec
 from pydantic_ai.agent import EventStreamHandler
 from pydantic_ai.messages import ModelMessage, UserContent
 from pydantic_ai.models import KnownModelName, Model
+from pydantic_ai.usage import UsageLimits
 
 from .capabilities import load_capability_types
 from .catalog import ProviderCatalog
@@ -30,6 +31,7 @@ class Yolop:
         deps_type: type[DepsT],
         model: Model | KnownModelName | str | None = None,
         message_history: Sequence[ModelMessage] | None = None,
+        usage_limits: UsageLimits | None = None,
     ) -> AgentRunResult[Any]:
         """Run to completion with a native handler that can steer through RunContext."""
         capability_types = load_capability_types(spec, catalog=self.provider_catalog)
@@ -44,6 +46,7 @@ class Yolop:
             prompt,
             deps=deps,
             message_history=message_history,
+            usage_limits=usage_limits,
             event_stream_handler=event_stream_handler,
         )
 

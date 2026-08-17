@@ -20,12 +20,16 @@ from yolop_runtime import (
     ExecutionPin,
     IdempotencyConflictError,
     PluginStateEntry,
+    RootBudgetSnapshot,
     RunAdmissionError,
+    RunBudgetExceededError,
     RunCompletion,
     RunNotFoundError,
+    RunRelation,
     RunReservation,
     RunStateError,
     RunStatus,
+    RuntimeBudget,
     RuntimeRunSnapshot,
     RuntimeSessionSnapshot,
     RuntimeStoreSchemaError,
@@ -48,7 +52,7 @@ from yolop_runtime import (
 
 _EMPTY_MESSAGES = b"[]"
 _USAGE_ADAPTER = TypeAdapter(RunUsage)
-_RUNTIME_SCHEMA_VERSION = 3
+_RUNTIME_SCHEMA_VERSION = 4
 _RUNTIME_METADATA_SCHEMA = """
 CREATE TABLE runtime_metadata (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
@@ -72,6 +76,7 @@ CREATE TABLE runtime_runs (
     session_id TEXT NOT NULL,
     parent_run_id TEXT,
     root_run_id TEXT,
+    relation TEXT NOT NULL,
     initiator TEXT NOT NULL,
     input_digest TEXT NOT NULL,
     full_messages BLOB NOT NULL,
@@ -103,6 +108,29 @@ CREATE TABLE runtime_run_events (
     FOREIGN KEY (namespace, run_id)
         REFERENCES runtime_runs (namespace, id) ON DELETE CASCADE
 );
+CREATE TABLE runtime_root_budgets (
+    namespace TEXT NOT NULL,
+    root_run_id TEXT NOT NULL,
+    request_limit INTEGER,
+    input_tokens_limit INTEGER,
+    output_tokens_limit INTEGER,
+    total_tokens_limit INTEGER,
+    child_run_limit INTEGER,
+    continuation_limit INTEGER,
+    wall_deadline TEXT,
+    requests_used INTEGER NOT NULL,
+    input_tokens_used INTEGER NOT NULL,
+    output_tokens_used INTEGER NOT NULL,
+    total_tokens_used INTEGER NOT NULL,
+    child_runs_used INTEGER NOT NULL,
+    continuations_used INTEGER NOT NULL,
+    active_runs INTEGER NOT NULL,
+    stopped INTEGER NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (namespace, root_run_id),
+    FOREIGN KEY (namespace, root_run_id)
+        REFERENCES runtime_runs (namespace, id) ON DELETE CASCADE
+);
 CREATE TABLE runtime_plugin_state (
     namespace TEXT NOT NULL,
     owner_id TEXT NOT NULL,
@@ -119,7 +147,7 @@ CREATE TABLE runtime_plugin_state (
 )
 """
 _RUN_COLUMNS = """
-id, namespace, session_id, parent_run_id, root_run_id, initiator,
+id, namespace, session_id, parent_run_id, root_run_id, relation, initiator,
 input_digest, full_messages, active_messages, idempotency_key, prompt, status,
 created_at, updated_at, owner_id, lease_expires_at, output, usage,
 session_revision, error_code, error_detail
@@ -147,6 +175,7 @@ class SQLiteRuntimeStore:
                 "runtime_runs",
                 "runtime_run_events",
                 "runtime_plugin_state",
+                "runtime_root_budgets",
             }
             if not tables:
                 connection.executescript(
@@ -198,6 +227,8 @@ class SQLiteRuntimeStore:
         max_pending: int | None = None,
         parent_run_id: str | None = None,
         root_run_id: str | None = None,
+        relation: RunRelation = RunRelation.ROOT,
+        root_budget: RuntimeBudget | None = None,
         initiator: str = "user",
         input_digest: str | None = None,
         full_messages: Sequence[ModelMessage] = (),
@@ -212,6 +243,8 @@ class SQLiteRuntimeStore:
             max_pending,
             parent_run_id,
             root_run_id,
+            relation,
+            root_budget,
             initiator,
             input_digest,
             full_messages,
@@ -220,6 +253,13 @@ class SQLiteRuntimeStore:
 
     async def load_run(self, namespace: str, run_id: str) -> RuntimeRunSnapshot:
         return await _to_thread(self._load_run, namespace, run_id)
+
+    async def load_root_budget(
+        self,
+        namespace: str,
+        root_run_id: str,
+    ) -> RootBudgetSnapshot | None:
+        return await _to_thread(self._load_root_budget, namespace, root_run_id)
 
     async def list_runs(
         self,
@@ -654,6 +694,8 @@ class SQLiteRuntimeStore:
         max_pending: int | None,
         parent_run_id: str | None,
         root_run_id: str | None,
+        relation: RunRelation,
+        root_budget: RuntimeBudget | None,
         initiator: str,
         run_input_digest: str | None,
         full_messages: Sequence[ModelMessage],
@@ -669,6 +711,16 @@ class SQLiteRuntimeStore:
             validate_session_id(parent_run_id)
         if root_run_id is not None:
             validate_session_id(root_run_id)
+        try:
+            relation = RunRelation(relation)
+        except (TypeError, ValueError) as error:
+            raise RunStateError("Run relation is unsupported") from error
+        if relation is RunRelation.ROOT and (parent_run_id is not None or root_run_id is not None):
+            raise RunStateError("A root Run cannot have an ancestor")
+        if relation is not RunRelation.ROOT and parent_run_id is None:
+            raise RunStateError("A related Run requires a parent Run")
+        if relation is not RunRelation.ROOT and root_budget is not None:
+            raise RunStateError("Only a root Run can define a root budget")
         run_input_digest = run_input_digest or input_digest(prompt)
         full_content = ModelMessagesTypeAdapter.dump_json(list(full_messages))
         active_content = ModelMessagesTypeAdapter.dump_json(list(active_messages))
@@ -718,14 +770,50 @@ class SQLiteRuntimeStore:
                     )
 
             run_id = new_session_id()
-            effective_root_run_id = root_run_id or parent_run_id or run_id
+            effective_root_run_id = run_id
+            if relation is not RunRelation.ROOT:
+                parent_row = connection.execute(
+                    """
+                    SELECT session_id, root_run_id FROM runtime_runs
+                    WHERE namespace = ? AND id = ?
+                    """,
+                    (validated_namespace, parent_run_id),
+                ).fetchone()
+                if parent_row is None or parent_row[0] != validated_id:
+                    raise RunNotFoundError(f"Parent Run {parent_run_id!r} does not exist")
+                parent_root_run_id = parent_row[1] or parent_run_id
+                assert parent_root_run_id is not None
+                if root_run_id is not None and root_run_id != parent_root_run_id:
+                    raise RunStateError("Related Run root does not match its parent")
+                effective_root_run_id = parent_root_run_id
+                root_budget_row = connection.execute(
+                    """
+                    SELECT request_limit, input_tokens_limit, output_tokens_limit,
+                           total_tokens_limit, child_run_limit, continuation_limit,
+                           wall_deadline, requests_used, input_tokens_used,
+                           output_tokens_used, total_tokens_used, child_runs_used,
+                           continuations_used, active_runs, stopped
+                    FROM runtime_root_budgets
+                    WHERE namespace = ? AND root_run_id = ?
+                    """,
+                    (validated_namespace, effective_root_run_id),
+                ).fetchone()
+                if root_budget_row is not None:
+                    _admit_root_budget(
+                        connection,
+                        namespace=validated_namespace,
+                        root_run_id=effective_root_run_id,
+                        relation=relation,
+                        row=root_budget_row,
+                        now=now,
+                    )
             connection.execute(
                 """
                 INSERT INTO runtime_runs (
-                    namespace, id, session_id, parent_run_id, root_run_id, initiator,
+                    namespace, id, session_id, parent_run_id, root_run_id, relation, initiator,
                     input_digest, full_messages, active_messages, idempotency_key, prompt, status,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     validated_namespace,
@@ -733,6 +821,7 @@ class SQLiteRuntimeStore:
                     validated_id,
                     parent_run_id,
                     effective_root_run_id,
+                    relation,
                     initiator,
                     run_input_digest,
                     full_content,
@@ -744,6 +833,14 @@ class SQLiteRuntimeStore:
                     now.isoformat(),
                 ),
             )
+            if root_budget is not None:
+                _insert_root_budget(
+                    connection,
+                    namespace=validated_namespace,
+                    root_run_id=run_id,
+                    budget=root_budget,
+                    now=now,
+                )
         return RunReservation(
             run=RuntimeRunSnapshot(
                 id=run_id,
@@ -756,6 +853,7 @@ class SQLiteRuntimeStore:
                 updated_at=now,
                 parent_run_id=parent_run_id,
                 root_run_id=effective_root_run_id,
+                relation=relation,
                 initiator=initiator,
                 input_digest=run_input_digest,
                 full_messages=list(full_messages),
@@ -769,6 +867,34 @@ class SQLiteRuntimeStore:
         validated_id = validate_session_id(run_id)
         with self._connect() as connection:
             return _select_runtime_run(connection, validated_namespace, validated_id)
+
+    def _load_root_budget(
+        self,
+        namespace: str,
+        root_run_id: str,
+    ) -> RootBudgetSnapshot | None:
+        validated_namespace = validate_namespace(namespace)
+        validated_root_id = validate_session_id(root_run_id)
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT request_limit, input_tokens_limit, output_tokens_limit,
+                       total_tokens_limit, child_run_limit, continuation_limit,
+                       wall_deadline, requests_used, input_tokens_used,
+                       output_tokens_used, total_tokens_used, child_runs_used,
+                       continuations_used, active_runs, stopped, updated_at
+                FROM runtime_root_budgets
+                WHERE namespace = ? AND root_run_id = ?
+                """,
+                (validated_namespace, validated_root_id),
+            ).fetchone()
+        if row is None:
+            return None
+        return _root_budget_snapshot(
+            namespace=validated_namespace,
+            root_run_id=validated_root_id,
+            row=row,
+        )
 
     def _list_runs(
         self,
@@ -870,6 +996,14 @@ class SQLiteRuntimeStore:
                     validated_namespace,
                     validated_id,
                 ),
+            )
+            _account_root_budget(
+                connection,
+                namespace=validated_namespace,
+                run=run,
+                usage=usage,
+                stopped=run.relation is RunRelation.ROOT,
+                now=now,
             )
         return replace(
             run,
@@ -1109,6 +1243,14 @@ class SQLiteRuntimeStore:
                     validated_id,
                 ),
             )
+            _account_root_budget(
+                connection,
+                namespace=validated_namespace,
+                run=run,
+                usage=usage,
+                stopped=False,
+                now=now,
+            )
             run_events = _run_events(connection, validated_namespace, validated_id)
         session = RuntimeSessionSnapshot(
             id=run.session_id,
@@ -1170,6 +1312,14 @@ class SQLiteRuntimeStore:
                     validated_id,
                 ),
             )
+            _account_root_budget(
+                connection,
+                namespace=validated_namespace,
+                run=run,
+                usage=None,
+                stopped=False,
+                now=now,
+            )
         return replace(
             run,
             status=RunStatus.FAILED,
@@ -1183,9 +1333,14 @@ class SQLiteRuntimeStore:
     def _interrupt_owned_runs(self, owner_id: str) -> int:
         if not owner_id:
             raise ValueError("Run owner ID cannot be empty")
-        now = datetime.now(UTC).isoformat()
+        now = datetime.now(UTC)
         with self._connect() as connection:
-            cursor = connection.execute(
+            connection.execute("BEGIN IMMEDIATE")
+            rows = connection.execute(
+                f"SELECT {_RUN_COLUMNS} FROM runtime_runs WHERE status = ? AND owner_id = ?",
+                (RunStatus.RUNNING, owner_id),
+            ).fetchall()
+            connection.execute(
                 """
                 UPDATE runtime_runs
                 SET status = ?, updated_at = ?, owner_id = NULL, lease_expires_at = NULL,
@@ -1194,19 +1349,38 @@ class SQLiteRuntimeStore:
                 """,
                 (
                     RunStatus.INTERRUPTED,
-                    now,
+                    now.isoformat(),
                     "run_interrupted",
                     "Run worker stopped before completion",
                     RunStatus.RUNNING,
                     owner_id,
                 ),
             )
-            return cursor.rowcount
+            for row in rows:
+                run = _runtime_run(row, connection=connection)
+                _account_root_budget(
+                    connection,
+                    namespace=run.namespace,
+                    run=run,
+                    usage=None,
+                    stopped=False,
+                    now=now,
+                )
+            return len(rows)
 
     def _interrupt_expired_runs(self) -> int:
-        now = datetime.now(UTC).isoformat()
+        now = datetime.now(UTC)
+        now_text = now.isoformat()
         with self._connect() as connection:
-            cursor = connection.execute(
+            connection.execute("BEGIN IMMEDIATE")
+            rows = connection.execute(
+                f"""
+                SELECT {_RUN_COLUMNS} FROM runtime_runs
+                WHERE status = ? AND lease_expires_at <= ?
+                """,
+                (RunStatus.RUNNING, now_text),
+            ).fetchall()
+            connection.execute(
                 """
                 UPDATE runtime_runs
                 SET status = ?, updated_at = ?, owner_id = NULL, lease_expires_at = NULL,
@@ -1215,14 +1389,24 @@ class SQLiteRuntimeStore:
                 """,
                 (
                     RunStatus.INTERRUPTED,
-                    now,
+                    now_text,
                     "run_interrupted",
                     "Run worker stopped before completion",
                     RunStatus.RUNNING,
-                    now,
+                    now_text,
                 ),
             )
-            return cursor.rowcount
+            for row in rows:
+                run = _runtime_run(row, connection=connection)
+                _account_root_budget(
+                    connection,
+                    namespace=run.namespace,
+                    run=run,
+                    usage=None,
+                    stopped=False,
+                    now=now,
+                )
+            return len(rows)
 
     def _list_runtime_sessions(self, namespace: str) -> list[str]:
         validated_namespace = validate_namespace(namespace)
@@ -1472,6 +1656,187 @@ def _validate_lease(owner_id: str, lease_seconds: float) -> None:
         raise ValueError("Run lease must be positive")
 
 
+def _insert_root_budget(
+    connection: sqlite3.Connection,
+    *,
+    namespace: str,
+    root_run_id: str,
+    budget: RuntimeBudget,
+    now: datetime,
+) -> None:
+    if budget.wall_deadline is not None and budget.wall_deadline <= now:
+        raise RunBudgetExceededError("Root wall deadline has passed")
+    if budget.request_limit == 0:
+        raise RunBudgetExceededError("Root request budget is exhausted")
+    connection.execute(
+        """
+        INSERT INTO runtime_root_budgets (
+            namespace, root_run_id, request_limit, input_tokens_limit,
+            output_tokens_limit, total_tokens_limit, child_run_limit,
+            continuation_limit, wall_deadline, requests_used,
+            input_tokens_used, output_tokens_used, total_tokens_used,
+            child_runs_used, continuations_used, active_runs, stopped, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, 0, 0, 1, 0, ?)
+        """,
+        (
+            namespace,
+            root_run_id,
+            budget.request_limit,
+            budget.input_tokens_limit,
+            budget.output_tokens_limit,
+            budget.total_tokens_limit,
+            budget.child_run_limit,
+            budget.continuation_limit,
+            budget.wall_deadline.isoformat() if budget.wall_deadline is not None else None,
+            now.isoformat(),
+        ),
+    )
+
+
+def _admit_root_budget(
+    connection: sqlite3.Connection,
+    *,
+    namespace: str,
+    root_run_id: str,
+    relation: RunRelation,
+    row: sqlite3.Row | tuple[Any, ...],
+    now: datetime,
+) -> None:
+    (
+        request_limit,
+        input_tokens_limit,
+        output_tokens_limit,
+        total_tokens_limit,
+        child_run_limit,
+        continuation_limit,
+        wall_deadline,
+        requests_used,
+        input_tokens_used,
+        output_tokens_used,
+        total_tokens_used,
+        child_runs_used,
+        continuations_used,
+        active_runs,
+        stopped,
+    ) = row
+    del active_runs
+    if stopped:
+        raise RunBudgetExceededError("Root execution was cancelled")
+    if wall_deadline is not None and datetime.fromisoformat(wall_deadline) <= now:
+        raise RunBudgetExceededError("Root wall deadline has passed")
+    if request_limit is not None and requests_used >= request_limit:
+        raise RunBudgetExceededError("Root request budget is exhausted")
+    if input_tokens_limit is not None and input_tokens_used >= input_tokens_limit:
+        raise RunBudgetExceededError("Root input-token budget is exhausted")
+    if output_tokens_limit is not None and output_tokens_used >= output_tokens_limit:
+        raise RunBudgetExceededError("Root output-token budget is exhausted")
+    if total_tokens_limit is not None and total_tokens_used >= total_tokens_limit:
+        raise RunBudgetExceededError("Root total-token budget is exhausted")
+    if relation is RunRelation.CHILD:
+        if child_run_limit is not None and child_runs_used >= child_run_limit:
+            raise RunBudgetExceededError("Root child Run budget is exhausted")
+        counter = "child_runs_used"
+    else:
+        if continuation_limit is not None and continuations_used >= continuation_limit:
+            raise RunBudgetExceededError("Root continuation budget is exhausted")
+        counter = "continuations_used"
+    connection.execute(
+        f"""
+        UPDATE runtime_root_budgets
+        SET {counter} = {counter} + 1, active_runs = active_runs + 1, updated_at = ?
+        WHERE namespace = ? AND root_run_id = ?
+        """,
+        (now.isoformat(), namespace, root_run_id),
+    )
+
+
+def _account_root_budget(
+    connection: sqlite3.Connection,
+    *,
+    namespace: str,
+    run: RuntimeRunSnapshot,
+    usage: RunUsage | None,
+    stopped: bool,
+    now: datetime,
+) -> None:
+    if run.root_run_id is None:
+        return
+    usage = usage or RunUsage()
+    connection.execute(
+        """
+        UPDATE runtime_root_budgets
+        SET requests_used = requests_used + ?,
+            input_tokens_used = input_tokens_used + ?,
+            output_tokens_used = output_tokens_used + ?,
+            total_tokens_used = total_tokens_used + ?,
+            active_runs = CASE WHEN active_runs > 0 THEN active_runs - 1 ELSE 0 END,
+            stopped = CASE WHEN ? THEN 1 ELSE stopped END,
+            updated_at = ?
+        WHERE namespace = ? AND root_run_id = ?
+        """,
+        (
+            usage.requests,
+            usage.input_tokens,
+            usage.output_tokens,
+            usage.total_tokens,
+            stopped,
+            now.isoformat(),
+            namespace,
+            run.root_run_id,
+        ),
+    )
+
+
+def _root_budget_snapshot(
+    *,
+    namespace: str,
+    root_run_id: str,
+    row: sqlite3.Row | tuple[Any, ...],
+) -> RootBudgetSnapshot:
+    (
+        request_limit,
+        input_tokens_limit,
+        output_tokens_limit,
+        total_tokens_limit,
+        child_run_limit,
+        continuation_limit,
+        wall_deadline,
+        requests_used,
+        input_tokens_used,
+        output_tokens_used,
+        total_tokens_used,
+        child_runs_used,
+        continuations_used,
+        active_runs,
+        stopped,
+        updated_at,
+    ) = row
+    return RootBudgetSnapshot(
+        namespace=namespace,
+        root_run_id=root_run_id,
+        budget=RuntimeBudget(
+            request_limit=request_limit,
+            input_tokens_limit=input_tokens_limit,
+            output_tokens_limit=output_tokens_limit,
+            total_tokens_limit=total_tokens_limit,
+            child_run_limit=child_run_limit,
+            continuation_limit=continuation_limit,
+            wall_deadline=datetime.fromisoformat(wall_deadline)
+            if wall_deadline is not None
+            else None,
+        ),
+        requests_used=requests_used,
+        input_tokens_used=input_tokens_used,
+        output_tokens_used=output_tokens_used,
+        total_tokens_used=total_tokens_used,
+        child_runs_used=child_runs_used,
+        continuations_used=continuations_used,
+        active_runs=active_runs,
+        stopped=bool(stopped),
+        updated_at=datetime.fromisoformat(updated_at),
+    )
+
+
 def _validate_state_text(value: str, field_name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"State {field_name} must not be empty")
@@ -1531,6 +1896,7 @@ def _runtime_run(
         session_id,
         parent_run_id,
         root_run_id,
+        relation,
         initiator,
         input_digest,
         full_content,
@@ -1569,6 +1935,7 @@ def _runtime_run(
         error_detail=error_detail,
         parent_run_id=parent_run_id,
         root_run_id=root_run_id,
+        relation=RunRelation(relation),
         initiator=initiator,
         input_digest=input_digest,
         full_messages=ModelMessagesTypeAdapter.validate_json(full_content),

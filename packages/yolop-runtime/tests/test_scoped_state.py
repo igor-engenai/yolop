@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from pydantic_ai import AgentSpec
-from pydantic_ai.usage import RunUsage
+from pydantic_ai.usage import RunUsage, UsageLimits
 from pytest import raises
 from yolop_runtime import (
     ExecutionPin,
@@ -41,6 +41,7 @@ class CaptureKernel(Yolop):
     async def execute(self, spec, prompt, **kwargs):
         del spec, prompt
         self.state = kwargs["deps"].state
+        self.usage_limits = kwargs["usage_limits"]
         return FakeResult()
 
 
@@ -77,6 +78,32 @@ def test_plugin_state_entry_rejects_oversized_payload() -> None:
             payload={"value": "x" * 70_000},
             created_at=datetime.now(UTC),
         )
+
+
+async def test_runtime_passes_native_usage_limits_to_kernel(tmp_path) -> None:
+    store = SQLiteRuntimeStore(tmp_path / "runtime.db")
+    kernel = CaptureKernel()
+    runtime = Runtime(store=store, kernel=kernel)
+    spec = AgentSpec(model="test:model")
+    session = await runtime.create_session(
+        "tenant/acme",
+        spec=spec,
+        model_id="test:model",
+    )
+    limits = UsageLimits(request_limit=2, total_tokens_limit=100)
+
+    await runtime.run(
+        "tenant/acme",
+        session.id,
+        "limited",
+        spec=spec,
+        deps=None,
+        deps_type=type(None),
+        idempotency_key="limited",
+        usage_limits=limits,
+    )
+
+    assert kernel.usage_limits is limits
 
 
 async def test_runtime_deps_expose_state_bound_to_execution_scope(tmp_path) -> None:

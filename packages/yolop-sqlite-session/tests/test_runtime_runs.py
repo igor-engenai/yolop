@@ -8,11 +8,205 @@ from yolop_runtime import (
     ExecutionPin,
     IdempotencyConflictError,
     RunAdmissionError,
+    RunBudgetExceededError,
+    RunRelation,
     RunStateError,
     RunStatus,
+    RuntimeBudget,
     SessionConflictError,
 )
 from yolop_sqlite_session import SQLiteRuntimeStore
+
+
+async def test_root_budget_accounts_related_runs_and_survives_restart(tmp_path) -> None:
+    database = tmp_path / "runtime.db"
+    store = SQLiteRuntimeStore(database)
+    session = await store.create_session(
+        "tenant/acme",
+        pin=ExecutionPin(agent_spec_id="a" * 64, model_id="openai:model"),
+    )
+    budget = RuntimeBudget(request_limit=2, continuation_limit=1, child_run_limit=1)
+    root = await store.reserve_run(
+        "tenant/acme",
+        session.id,
+        idempotency_key="root",
+        prompt="Root",
+        root_budget=budget,
+    )
+    claimed_root = await store.claim_run(
+        "tenant/acme",
+        root.run.id,
+        owner_id="worker-root",
+        lease_seconds=30,
+    )
+    await store.complete_run(
+        "tenant/acme",
+        claimed_root.id,
+        owner_id="worker-root",
+        expected_session_revision=session.revision,
+        messages=[],
+        output="root",
+        usage=RunUsage(requests=1, input_tokens=3, output_tokens=2),
+    )
+
+    continuation = await store.reserve_run(
+        "tenant/acme",
+        session.id,
+        idempotency_key="continuation",
+        prompt="Continue",
+        parent_run_id=root.run.id,
+        root_run_id=root.run.id,
+        relation=RunRelation.CONTINUATION,
+    )
+    claimed_continuation = await store.claim_run(
+        "tenant/acme",
+        continuation.run.id,
+        owner_id="worker-continuation",
+        lease_seconds=30,
+    )
+    completed = await store.complete_run(
+        "tenant/acme",
+        claimed_continuation.id,
+        owner_id="worker-continuation",
+        expected_session_revision=(await store.load_session("tenant/acme", session.id)).revision,
+        messages=[],
+        output="continuation",
+        usage=RunUsage(requests=1, input_tokens=4, output_tokens=5),
+    )
+
+    reopened = SQLiteRuntimeStore(database)
+    account = await reopened.load_root_budget("tenant/acme", root.run.id)
+    assert account is not None
+    assert account.requests_used == 2
+    assert account.input_tokens_used == 7
+    assert account.output_tokens_used == 7
+    assert account.total_tokens_used == 14
+    assert account.continuations_used == 1
+    assert account.active_runs == 0
+    assert completed.run.root_run_id == root.run.id
+
+    with raises(RunBudgetExceededError):
+        await reopened.reserve_run(
+            "tenant/acme",
+            session.id,
+            idempotency_key="too-many",
+            prompt="Too many",
+            parent_run_id=continuation.run.id,
+            root_run_id=root.run.id,
+            relation=RunRelation.CONTINUATION,
+        )
+
+
+async def test_root_budget_shares_child_limit_with_descendants(tmp_path) -> None:
+    store = SQLiteRuntimeStore(tmp_path / "runtime.db")
+    session = await store.create_session(
+        "tenant/acme",
+        pin=ExecutionPin(agent_spec_id="a" * 64, model_id="openai:model"),
+    )
+    root = await store.reserve_run(
+        "tenant/acme",
+        session.id,
+        idempotency_key="root",
+        prompt="Root",
+        root_budget=RuntimeBudget(child_run_limit=1),
+    )
+    child = await store.reserve_run(
+        "tenant/acme",
+        session.id,
+        idempotency_key="child",
+        prompt="Child",
+        parent_run_id=root.run.id,
+        relation=RunRelation.CHILD,
+    )
+
+    assert child.run.relation is RunRelation.CHILD
+    with raises(RunBudgetExceededError):
+        await store.reserve_run(
+            "tenant/acme",
+            session.id,
+            idempotency_key="second-child",
+            prompt="Second child",
+            parent_run_id=root.run.id,
+            relation=RunRelation.CHILD,
+        )
+
+
+async def test_root_budgets_are_isolated_for_concurrent_sessions(tmp_path) -> None:
+    store = SQLiteRuntimeStore(tmp_path / "runtime.db")
+    pin = ExecutionPin(agent_spec_id="a" * 64, model_id="openai:model")
+    first_session = await store.create_session("tenant/acme", pin=pin)
+    second_session = await store.create_session("tenant/acme", pin=pin)
+    first = await store.reserve_run(
+        "tenant/acme",
+        first_session.id,
+        idempotency_key="first",
+        prompt="First",
+        root_budget=RuntimeBudget(request_limit=1),
+    )
+    second = await store.reserve_run(
+        "tenant/acme",
+        second_session.id,
+        idempotency_key="second",
+        prompt="Second",
+        root_budget=RuntimeBudget(request_limit=1),
+    )
+    first_claimed = await store.claim_run(
+        "tenant/acme", first.run.id, owner_id="worker-1", lease_seconds=30
+    )
+    second_claimed = await store.claim_run(
+        "tenant/acme", second.run.id, owner_id="worker-2", lease_seconds=30
+    )
+    await store.complete_run(
+        "tenant/acme",
+        first_claimed.id,
+        owner_id="worker-1",
+        expected_session_revision=first_session.revision,
+        messages=[],
+        output="first",
+        usage=RunUsage(requests=1),
+    )
+    await store.complete_run(
+        "tenant/acme",
+        second_claimed.id,
+        owner_id="worker-2",
+        expected_session_revision=second_session.revision,
+        messages=[],
+        output="second",
+        usage=RunUsage(requests=1),
+    )
+
+    first_budget = await store.load_root_budget("tenant/acme", first.run.id)
+    second_budget = await store.load_root_budget("tenant/acme", second.run.id)
+    assert first_budget is not None and first_budget.requests_used == 1
+    assert second_budget is not None and second_budget.requests_used == 1
+
+
+async def test_cancelled_root_stops_future_related_runs(tmp_path) -> None:
+    store = SQLiteRuntimeStore(tmp_path / "runtime.db")
+    session = await store.create_session(
+        "tenant/acme",
+        pin=ExecutionPin(agent_spec_id="a" * 64, model_id="openai:model"),
+    )
+    root = await store.reserve_run(
+        "tenant/acme",
+        session.id,
+        idempotency_key="root",
+        prompt="Root",
+        root_budget=RuntimeBudget(continuation_limit=2),
+    )
+    await store.cancel_run("tenant/acme", root.run.id)
+
+    account = await store.load_root_budget("tenant/acme", root.run.id)
+    assert account is not None and account.stopped is True
+    with raises(RunBudgetExceededError):
+        await store.reserve_run(
+            "tenant/acme",
+            session.id,
+            idempotency_key="continuation",
+            prompt="Continuation",
+            parent_run_id=root.run.id,
+            relation=RunRelation.CONTINUATION,
+        )
 
 
 async def test_run_reservation_is_idempotent(tmp_path) -> None:

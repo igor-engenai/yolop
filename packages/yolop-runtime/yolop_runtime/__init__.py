@@ -73,6 +73,18 @@ class RunStateError(RuntimeError):
     code = "run_state_conflict"
 
 
+class RunBudgetExceededError(RuntimeError):
+    """A root budget cannot admit more related work."""
+
+    code = "run_budget_exceeded"
+
+
+class RuntimeDeadlineExceededError(RuntimeError):
+    """A root wall deadline has passed."""
+
+    code = "runtime_deadline_exceeded"
+
+
 class RuntimeStoreSchemaError(RuntimeError):
     """Stored runtime data uses an unsupported schema."""
 
@@ -204,6 +216,60 @@ class RunStatus(StrEnum):
     INTERRUPTED = "interrupted"
 
 
+class RunRelation(StrEnum):
+    """Relationship of a Run to its root execution."""
+
+    ROOT = "root"
+    CONTINUATION = "continuation"
+    CHILD = "child"
+
+
+@dataclass(frozen=True)
+class RuntimeBudget:
+    """Durable aggregate limits shared by a root Run and its descendants."""
+
+    request_limit: int | None = None
+    input_tokens_limit: int | None = None
+    output_tokens_limit: int | None = None
+    total_tokens_limit: int | None = None
+    child_run_limit: int | None = None
+    continuation_limit: int | None = None
+    wall_deadline: datetime | None = None
+
+    def __post_init__(self) -> None:
+        for name in (
+            "request_limit",
+            "input_tokens_limit",
+            "output_tokens_limit",
+            "total_tokens_limit",
+            "child_run_limit",
+            "continuation_limit",
+        ):
+            value = getattr(self, name)
+            if value is not None and (isinstance(value, bool) or value < 0):
+                raise ValueError(f"Runtime budget {name} must be non-negative")
+        if self.wall_deadline is not None and self.wall_deadline.tzinfo is None:
+            raise ValueError("Runtime budget wall_deadline must be timezone-aware")
+
+
+@dataclass(frozen=True)
+class RootBudgetSnapshot:
+    """Durable root budget limits and consumed aggregate usage."""
+
+    namespace: str
+    root_run_id: str
+    budget: RuntimeBudget
+    requests_used: int = 0
+    input_tokens_used: int = 0
+    output_tokens_used: int = 0
+    total_tokens_used: int = 0
+    child_runs_used: int = 0
+    continuations_used: int = 0
+    active_runs: int = 0
+    stopped: bool = False
+    updated_at: datetime | None = None
+
+
 class StateScope(StrEnum):
     """Durable plugin state lifetime."""
 
@@ -279,6 +345,7 @@ class RuntimeRunSnapshot:
     error_detail: str | None = None
     parent_run_id: str | None = None
     root_run_id: str | None = None
+    relation: RunRelation = RunRelation.ROOT
     initiator: str = "user"
     input_digest: str = ""
     full_messages: list[ModelMessage] = field(default_factory=list)
@@ -368,6 +435,12 @@ class RuntimeStore(Protocol):
         expected_revision: str,
     ) -> None: ...
 
+    async def load_root_budget(
+        self,
+        namespace: str,
+        root_run_id: str,
+    ) -> RootBudgetSnapshot | None: ...
+
     async def read_state(
         self,
         namespace: str,
@@ -428,6 +501,8 @@ class RuntimeStore(Protocol):
         max_pending: int | None = None,
         parent_run_id: str | None = None,
         root_run_id: str | None = None,
+        relation: RunRelation = RunRelation.ROOT,
+        root_budget: RuntimeBudget | None = None,
         initiator: str = "user",
         input_digest: str | None = None,
         full_messages: Sequence[ModelMessage] = (),
@@ -650,19 +725,24 @@ __all__ = [
     "InvalidNamespaceError",
     "InvalidSessionIdError",
     "RunAdmissionError",
+    "RunBudgetExceededError",
     "RunCompletion",
     "RunNotFoundError",
+    "RunRelation",
     "RunReservation",
     "RunStateError",
     "RunStatus",
     "RuntimeRunSnapshot",
     "RuntimeSessionSnapshot",
+    "RuntimeBudget",
+    "RuntimeDeadlineExceededError",
     "RuntimeDeps",
     "RuntimeEventSink",
     "RuntimeFollowUpSink",
     "RuntimeStore",
     "Runtime",
     "RuntimeStoreSchemaError",
+    "RootBudgetSnapshot",
     "ScopedStateContext",
     "SessionConflictError",
     "SessionFormatError",

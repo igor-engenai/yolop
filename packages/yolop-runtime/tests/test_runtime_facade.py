@@ -13,6 +13,7 @@ from yolop_runtime import (
     ExecutionPin,
     PluginStateEntry,
     RunCompletion,
+    RunRelation,
     RunReservation,
     RunStatus,
     Runtime,
@@ -58,6 +59,14 @@ class MemoryStore:
         expected_revision: str,
     ) -> None:
         del namespace, session_id, expected_revision
+
+    async def load_root_budget(
+        self,
+        namespace: str,
+        root_run_id: str,
+    ):
+        del namespace, root_run_id
+        return None
 
     async def read_state(
         self,
@@ -145,12 +154,14 @@ class MemoryStore:
         max_pending: int | None = None,
         parent_run_id: str | None = None,
         root_run_id: str | None = None,
+        relation: RunRelation = RunRelation.ROOT,
+        root_budget: Any = None,
         initiator: str = "user",
         input_digest: str | None = None,
         full_messages: Sequence[ModelMessage] = (),
         active_messages: Sequence[ModelMessage] = (),
     ) -> RunReservation:
-        del max_pending, input_digest
+        del max_pending, root_budget, input_digest
         now = datetime.now(UTC)
         self.run = RuntimeRunSnapshot(
             id="00000000-0000-4000-8000-000000000002",
@@ -163,6 +174,7 @@ class MemoryStore:
             updated_at=now,
             parent_run_id=parent_run_id,
             root_run_id=root_run_id or parent_run_id or "00000000-0000-4000-8000-000000000002",
+            relation=relation,
             initiator=initiator,
             full_messages=list(full_messages),
             active_messages=list(active_messages),
