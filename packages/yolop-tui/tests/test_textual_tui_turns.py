@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import yolop_tui.app as tui_app
 from pydantic_ai import AgentSpec
+from pydantic_ai.capabilities import Capability
 from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, TextPart, UserPromptPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pytest import LogCaptureFixture, MonkeyPatch
@@ -21,10 +22,13 @@ async def test_textual_tui_streams_and_persists_a_native_turn(
     tmp_path: Path,
     monkeypatch: MonkeyPatch,
 ) -> None:
+    mandatory = Capability(id="host-policy", instructions="Host policy active")
+
     async def respond(
         _messages: list[ModelMessage],
-        _info: AgentInfo,
+        info: AgentInfo,
     ) -> AsyncIterator[str]:
+        assert info.instructions == "Host policy active"
         yield "Textual model answer"
 
     async def drive(pilot: Pilot) -> None:
@@ -51,6 +55,7 @@ async def test_textual_tui_streams_and_persists_a_native_turn(
         model=FunctionModel(stream_function=respond),
         model_id="test:model",
         cwd=tmp_path,
+        mandatory_capabilities=[mandatory],
     )
 
     session_id = (await store.list_sessions("test"))[0]

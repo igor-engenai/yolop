@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator
 from fastapi import Request
 from httpx import ASGITransport, AsyncClient
 from pydantic_ai import AgentSpec
+from pydantic_ai.capabilities import Capability
 from pydantic_ai.messages import ModelMessage, ModelRequest, UserPromptPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.models.test import TestModel
@@ -174,12 +175,14 @@ async def test_json_run_requires_an_idempotency_key(tmp_path) -> None:
 async def test_json_run_uses_request_scoped_deps_and_persists_history(tmp_path) -> None:
     resolved: list[tuple[str, str]] = []
     calls = 0
+    mandatory = Capability(id="host-policy", instructions="Host policy active")
 
     def resolve_deps(namespace: str, session_id: str) -> None:
         resolved.append((namespace, session_id))
 
-    async def respond(messages: list[ModelMessage], _info: AgentInfo) -> AsyncIterator[str]:
+    async def respond(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str]:
         nonlocal calls
+        assert info.instructions == "Host policy active"
         calls += 1
         request = messages[-1]
         assert isinstance(request, ModelRequest)
@@ -196,6 +199,7 @@ async def test_json_run_uses_request_scoped_deps_and_persists_history(tmp_path) 
         deps_type=type(None),
         model=FunctionModel(stream_function=respond),
         model_id="test:function",
+        mandatory_capabilities=[mandatory],
     )
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
