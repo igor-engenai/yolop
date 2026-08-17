@@ -19,6 +19,7 @@ from pydantic_core import from_json, to_json
 from yolop_runtime import (
     ExecutionPin,
     IdempotencyConflictError,
+    PluginStateEntry,
     RunAdmissionError,
     RunCompletion,
     RunNotFoundError,
@@ -32,7 +33,13 @@ from yolop_runtime import (
     SessionFormatError,
     SessionLockTimeoutError,
     SessionNotFoundError,
+    StateFormatError,
+    StateSchemaError,
+    StateScope,
+    StateSequenceConflictError,
     StoredRunEvent,
+    decode_state_payload,
+    encode_state_payload,
     input_digest,
     new_session_id,
     validate_namespace,
@@ -41,7 +48,7 @@ from yolop_runtime import (
 
 _EMPTY_MESSAGES = b"[]"
 _USAGE_ADAPTER = TypeAdapter(RunUsage)
-_RUNTIME_SCHEMA_VERSION = 2
+_RUNTIME_SCHEMA_VERSION = 3
 _RUNTIME_METADATA_SCHEMA = """
 CREATE TABLE runtime_metadata (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
@@ -95,6 +102,20 @@ CREATE TABLE runtime_run_events (
     PRIMARY KEY (namespace, run_id, sequence),
     FOREIGN KEY (namespace, run_id)
         REFERENCES runtime_runs (namespace, id) ON DELETE CASCADE
+);
+CREATE TABLE runtime_plugin_state (
+    namespace TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    scope_id TEXT NOT NULL,
+    state_kind TEXT NOT NULL,
+    schema_version INTEGER NOT NULL,
+    sequence INTEGER NOT NULL,
+    payload BLOB NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (
+        namespace, owner_id, scope, scope_id, state_kind, sequence
+    )
 )
 """
 _RUN_COLUMNS = """
@@ -125,6 +146,7 @@ class SQLiteRuntimeStore:
                 "runtime_sessions",
                 "runtime_runs",
                 "runtime_run_events",
+                "runtime_plugin_state",
             }
             if not tables:
                 connection.executescript(
@@ -231,6 +253,50 @@ class SQLiteRuntimeStore:
             active_messages,
             output,
             usage,
+        )
+
+    async def read_state(
+        self,
+        namespace: str,
+        *,
+        owner_id: str,
+        scope: StateScope,
+        scope_id: str,
+        state_kind: str,
+        schema_version: int | None = None,
+    ) -> list[PluginStateEntry]:
+        return await _to_thread(
+            self._read_state,
+            namespace,
+            owner_id,
+            scope,
+            scope_id,
+            state_kind,
+            schema_version,
+        )
+
+    async def append_state(
+        self,
+        namespace: str,
+        *,
+        owner_id: str,
+        scope: StateScope,
+        scope_id: str,
+        state_kind: str,
+        schema_version: int,
+        expected_sequence: int,
+        payload: Any,
+    ) -> PluginStateEntry:
+        return await _to_thread(
+            self._append_state,
+            namespace,
+            owner_id,
+            scope,
+            scope_id,
+            state_kind,
+            schema_version,
+            expected_sequence,
+            payload,
         )
 
     async def claim_run(
@@ -452,6 +518,132 @@ class SQLiteRuntimeStore:
                 revision=revision,
                 head_run_id=None,
             )
+
+    def _read_state(
+        self,
+        namespace: str,
+        owner_id: str,
+        scope: StateScope,
+        scope_id: str,
+        state_kind: str,
+        schema_version: int | None,
+    ) -> list[PluginStateEntry]:
+        validated_namespace = validate_namespace(namespace)
+        validated_owner = _validate_state_text(owner_id, "owner_id")
+        validated_scope = _validate_state_scope(scope)
+        validated_scope_id = validate_session_id(scope_id)
+        validated_kind = _validate_state_text(state_kind, "state_kind")
+        if schema_version is not None:
+            _validate_schema_version(schema_version)
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT owner_id, scope, scope_id, state_kind, schema_version,
+                       sequence, payload, created_at
+                FROM runtime_plugin_state
+                WHERE namespace = ? AND owner_id = ? AND scope = ?
+                  AND scope_id = ? AND state_kind = ?
+                ORDER BY sequence
+                """,
+                (
+                    validated_namespace,
+                    validated_owner,
+                    validated_scope.value,
+                    validated_scope_id,
+                    validated_kind,
+                ),
+            ).fetchall()
+        entries = [
+            _state_entry(
+                namespace=validated_namespace,
+                row=row,
+            )
+            for row in rows
+        ]
+        if schema_version is not None and any(
+            entry.schema_version != schema_version for entry in entries
+        ):
+            raise StateSchemaError(
+                f"State stream {validated_kind!r} has an unsupported schema version"
+            )
+        return entries
+
+    def _append_state(
+        self,
+        namespace: str,
+        owner_id: str,
+        scope: StateScope,
+        scope_id: str,
+        state_kind: str,
+        schema_version: int,
+        expected_sequence: int,
+        payload: Any,
+    ) -> PluginStateEntry:
+        validated_namespace = validate_namespace(namespace)
+        validated_owner = _validate_state_text(owner_id, "owner_id")
+        validated_scope = _validate_state_scope(scope)
+        validated_scope_id = validate_session_id(scope_id)
+        validated_kind = _validate_state_text(state_kind, "state_kind")
+        _validate_schema_version(schema_version)
+        if expected_sequence < 0:
+            raise ValueError("Expected state sequence cannot be negative")
+        encoded = encode_state_payload(payload)
+        stored_payload = decode_state_payload(encoded)
+        now = datetime.now(UTC)
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """
+                SELECT COALESCE(MAX(sequence), 0)
+                FROM runtime_plugin_state
+                WHERE namespace = ? AND owner_id = ? AND scope = ?
+                  AND scope_id = ? AND state_kind = ?
+                """,
+                (
+                    validated_namespace,
+                    validated_owner,
+                    validated_scope.value,
+                    validated_scope_id,
+                    validated_kind,
+                ),
+            ).fetchone()
+            assert row is not None
+            current_sequence = row[0]
+            if current_sequence != expected_sequence:
+                raise StateSequenceConflictError(
+                    f"State stream {validated_kind!r} is at sequence {current_sequence}"
+                )
+            sequence = current_sequence + 1
+            connection.execute(
+                """
+                INSERT INTO runtime_plugin_state (
+                    namespace, owner_id, scope, scope_id, state_kind,
+                    schema_version, sequence, payload, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    validated_namespace,
+                    validated_owner,
+                    validated_scope.value,
+                    validated_scope_id,
+                    validated_kind,
+                    schema_version,
+                    sequence,
+                    encoded,
+                    now.isoformat(),
+                ),
+            )
+        return PluginStateEntry(
+            namespace=validated_namespace,
+            owner_id=validated_owner,
+            scope=validated_scope,
+            scope_id=validated_scope_id,
+            state_kind=validated_kind,
+            schema_version=schema_version,
+            sequence=sequence,
+            payload=stored_payload,
+            created_at=now,
+        )
 
     def _reserve_run(
         self,
@@ -1095,6 +1287,28 @@ class SQLiteRuntimeStore:
             if row[0] != expected_revision:
                 raise SessionConflictError(f"Session {session_id!r} has changed")
             connection.execute(
+                """
+                DELETE FROM runtime_plugin_state
+                WHERE namespace = ? AND (
+                    (scope = ? AND scope_id = ?)
+                    OR (
+                        scope = ? AND scope_id IN (
+                            SELECT id FROM runtime_runs
+                            WHERE namespace = ? AND session_id = ?
+                        )
+                    )
+                )
+                """,
+                (
+                    validated_namespace,
+                    StateScope.SESSION,
+                    validated_id,
+                    StateScope.RUN,
+                    validated_namespace,
+                    validated_id,
+                ),
+            )
+            connection.execute(
                 "DELETE FROM runtime_sessions WHERE namespace = ? AND id = ?",
                 (validated_namespace, validated_id),
             )
@@ -1256,6 +1470,54 @@ def _validate_lease(owner_id: str, lease_seconds: float) -> None:
         raise ValueError("Run owner ID cannot be empty")
     if lease_seconds <= 0:
         raise ValueError("Run lease must be positive")
+
+
+def _validate_state_text(value: str, field_name: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"State {field_name} must not be empty")
+    if len(value) > 128:
+        raise ValueError(f"State {field_name} exceeds 128 characters")
+    return value
+
+
+def _validate_state_scope(scope: StateScope) -> StateScope:
+    try:
+        return StateScope(scope)
+    except (TypeError, ValueError) as error:
+        raise StateFormatError("State scope is unsupported") from error
+
+
+def _validate_schema_version(schema_version: int) -> None:
+    if isinstance(schema_version, bool) or not isinstance(schema_version, int):
+        raise StateSchemaError("State schema version must be an integer")
+    if schema_version < 1:
+        raise StateSchemaError("State schema version must be positive")
+
+
+def _state_entry(
+    *,
+    namespace: str,
+    row: sqlite3.Row | tuple[Any, ...],
+) -> PluginStateEntry:
+    owner_id, scope, scope_id, state_kind, schema_version, sequence, payload, created_at = row
+    _validate_schema_version(schema_version)
+    if not isinstance(sequence, int) or sequence < 1:
+        raise StateFormatError("Stored state sequence is invalid")
+    try:
+        timestamp = datetime.fromisoformat(created_at)
+    except (TypeError, ValueError) as error:
+        raise StateFormatError("Stored state timestamp is invalid") from error
+    return PluginStateEntry(
+        namespace=namespace,
+        owner_id=owner_id,
+        scope=_validate_state_scope(scope),
+        scope_id=scope_id,
+        state_kind=state_kind,
+        schema_version=schema_version,
+        sequence=sequence,
+        payload=decode_state_payload(payload),
+        created_at=timestamp,
+    )
 
 
 def _runtime_run(

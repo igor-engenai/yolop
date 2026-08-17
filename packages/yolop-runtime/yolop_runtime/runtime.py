@@ -28,6 +28,7 @@ from . import (
     RuntimeRunSnapshot,
     RuntimeSessionSnapshot,
     RuntimeStore,
+    ScopedStateContext,
     ensure_session_pin,
 )
 
@@ -94,7 +95,6 @@ class Runtime[HostDepsT]:
         deps: HostDepsT,
         deps_type: type[HostDepsT],
         idempotency_key: str,
-        state: Any = None,
         event_sink: RuntimeEventSink | None = None,
         follow_up_sink: RuntimeFollowUpSink | None = None,
         max_pending: int | None = None,
@@ -151,7 +151,12 @@ class Runtime[HostDepsT]:
         )
         runtime_deps = RuntimeDeps(
             scope=scope,
-            state=state,
+            state=ScopedStateContext(
+                store=self.store,
+                namespace=namespace,
+                session_id=session_id,
+                run_id=claimed.id,
+            ),
             event_sink=event_sink,
             follow_up_sink=follow_up_sink,
             host=deps,

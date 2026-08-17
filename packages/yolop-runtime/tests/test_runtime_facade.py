@@ -1,6 +1,6 @@
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any
 
@@ -11,13 +11,17 @@ from pydantic_ai.usage import RunUsage
 from pytest import raises
 from yolop_runtime import (
     ExecutionPin,
+    PluginStateEntry,
     RunCompletion,
     RunReservation,
     RunStatus,
     Runtime,
     RuntimeRunSnapshot,
     RuntimeSessionSnapshot,
+    ScopedStateContext,
     SessionPinMismatchError,
+    StateScope,
+    StateSequenceConflictError,
 )
 
 
@@ -25,6 +29,7 @@ from yolop_runtime import (
 class MemoryStore:
     session: RuntimeSessionSnapshot | None = None
     run: RuntimeRunSnapshot | None = None
+    state_entries: list[PluginStateEntry] = field(default_factory=list)
 
     async def create_session(self, namespace: str, *, pin: ExecutionPin) -> RuntimeSessionSnapshot:
         self.session = RuntimeSessionSnapshot(
@@ -53,6 +58,69 @@ class MemoryStore:
         expected_revision: str,
     ) -> None:
         del namespace, session_id, expected_revision
+
+    async def read_state(
+        self,
+        namespace: str,
+        *,
+        owner_id: str,
+        scope: StateScope,
+        scope_id: str,
+        state_kind: str,
+        schema_version: int | None = None,
+    ) -> list[PluginStateEntry]:
+        del namespace
+        entries = [
+            entry
+            for entry in self.state_entries
+            if entry.owner_id == owner_id
+            and entry.scope is scope
+            and entry.scope_id == scope_id
+            and entry.state_kind == state_kind
+        ]
+        if schema_version is not None:
+            entries = [entry for entry in entries if entry.schema_version == schema_version]
+        return entries
+
+    async def append_state(
+        self,
+        namespace: str,
+        *,
+        owner_id: str,
+        scope: StateScope,
+        scope_id: str,
+        state_kind: str,
+        schema_version: int,
+        expected_sequence: int,
+        payload: Any,
+    ) -> PluginStateEntry:
+        del namespace
+        current_sequence = max(
+            (
+                entry.sequence
+                for entry in self.state_entries
+                if entry.owner_id == owner_id
+                and entry.scope is scope
+                and entry.scope_id == scope_id
+                and entry.state_kind == state_kind
+            ),
+            default=0,
+        )
+        if current_sequence != expected_sequence:
+            raise StateSequenceConflictError("stale state sequence")
+        entry = PluginStateEntry(
+            namespace="test",
+            owner_id=owner_id,
+            scope=scope,
+            scope_id=scope_id,
+            state_kind=state_kind,
+            schema_version=schema_version,
+            sequence=expected_sequence + 1,
+            payload=payload,
+            created_at=datetime.now(UTC),
+        )
+        self.state_entries.append(entry)
+        return entry
 
     async def replace_session(
         self,
@@ -284,6 +352,37 @@ def test_execution_scope_defaults_root_run_and_rejects_empty_initiator() -> None
             run_id=scope.run_id,
             initiator=" ",
         )
+
+
+async def test_memory_store_state_contract_is_owner_bound_and_compare_append() -> None:
+    store = MemoryStore()
+    session = await store.create_session(
+        "test",
+        pin=ExecutionPin(agent_spec_id="a" * 64, model_id="test:model"),
+    )
+    state = ScopedStateContext(
+        store=store,
+        namespace="test",
+        session_id=session.id,
+        run_id="00000000-0000-4000-8000-000000000002",
+    ).for_session("plugin.counter")
+
+    first = await state.append("counter", {"count": 1})
+
+    assert (await state.read("counter")) == [first]
+    assert (
+        await ScopedStateContext(
+            store=store,
+            namespace="test",
+            session_id=session.id,
+            run_id="00000000-0000-4000-8000-000000000002",
+        )
+        .for_session("plugin.other")
+        .read("counter")
+        == []
+    )
+    with raises(StateSequenceConflictError):
+        await state.append("counter", {"count": 2})
 
 
 async def test_runtime_rejects_a_session_pin_mismatch_before_model_execution() -> None:

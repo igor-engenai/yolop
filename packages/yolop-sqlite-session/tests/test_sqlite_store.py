@@ -177,7 +177,7 @@ def test_runtime_store_rejects_the_previous_runtime_schema(tmp_path) -> None:
     store = SQLiteRuntimeStore(database)
     del store
     with sqlite3.connect(database) as connection:
-        connection.execute("UPDATE runtime_metadata SET schema_version = 1")
+        connection.execute("UPDATE runtime_metadata SET schema_version = 2")
 
     with raises(RuntimeStoreSchemaError):
         SQLiteRuntimeStore(database)

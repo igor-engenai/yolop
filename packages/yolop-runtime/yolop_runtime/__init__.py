@@ -85,6 +85,30 @@ class SessionLockTimeoutError(TimeoutError):
     code = "session_lock_timeout"
 
 
+class StateSequenceConflictError(RuntimeError):
+    """A state append used a stale sequence."""
+
+    code = "state_sequence_conflict"
+
+
+class StateFormatError(ValueError):
+    """Stored plugin state is not valid bounded JSON state."""
+
+    code = "state_format_error"
+
+
+class StatePayloadLimitError(ValueError):
+    """Plugin state exceeds the runtime payload limit."""
+
+    code = "state_payload_limit"
+
+
+class StateSchemaError(ValueError):
+    """Plugin state does not use the requested schema version."""
+
+    code = "state_schema_error"
+
+
 @dataclass(frozen=True)
 class ExecutionScope:
     """Identity for one durable runtime execution."""
@@ -110,16 +134,6 @@ class ExecutionScope:
             raise ValueError("Execution initiator must not be empty")
 
 
-class ScopedState(Protocol):
-    """Host-provided state access already scoped to the current execution."""
-
-    async def get(self, key: str) -> Any: ...
-
-    async def set(self, key: str, value: Any) -> None: ...
-
-    async def delete(self, key: str) -> None: ...
-
-
 class RuntimeEventSink(Protocol):
     """Receives native Pydantic AI stream events without translation."""
 
@@ -141,7 +155,7 @@ class RuntimeDeps[HostDepsT, StateT]:
     """Dependencies exposed to one runtime execution."""
 
     scope: ExecutionScope
-    state: StateT | None
+    state: StateT
     event_sink: RuntimeEventSink | None
     follow_up_sink: RuntimeFollowUpSink | None
     host: HostDepsT
@@ -188,6 +202,51 @@ class RunStatus(StrEnum):
     COMPLETED = "completed"
     FAILED = "failed"
     INTERRUPTED = "interrupted"
+
+
+class StateScope(StrEnum):
+    """Durable plugin state lifetime."""
+
+    SESSION = "session"
+    RUN = "run"
+
+
+MAX_STATE_OWNER_ID_LENGTH = 128
+MAX_STATE_KIND_LENGTH = 128
+MAX_STATE_PAYLOAD_BYTES = 64 * 1024
+
+
+@dataclass(frozen=True)
+class PluginStateEntry:
+    """One append-only opaque plugin state entry."""
+
+    namespace: str
+    owner_id: str
+    scope: StateScope
+    scope_id: str
+    state_kind: str
+    schema_version: int
+    sequence: int
+    payload: Any
+    created_at: datetime
+
+    def __post_init__(self) -> None:
+        validate_namespace(self.namespace)
+        validate_session_id(self.scope_id)
+        if not isinstance(self.scope, StateScope):
+            try:
+                object.__setattr__(self, "scope", StateScope(self.scope))
+            except (TypeError, ValueError) as error:
+                raise StateFormatError("State scope is unsupported") from error
+        _validate_state_text(self.owner_id, "owner_id")
+        _validate_state_text(self.state_kind, "state_kind")
+        if isinstance(self.schema_version, bool) or not isinstance(self.schema_version, int):
+            raise StateSchemaError("State schema version must be an integer")
+        if self.schema_version < 1:
+            raise StateSchemaError("State schema version must be positive")
+        if not isinstance(self.sequence, int) or self.sequence < 1:
+            raise ValueError("State sequence must be a positive integer")
+        encode_state_payload(self.payload)
 
 
 @dataclass(frozen=True)
@@ -243,6 +302,50 @@ class RunCompletion:
     run: RuntimeRunSnapshot
 
 
+def _validate_state_text(value: str, field_name: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"State {field_name} must not be empty")
+    limit = MAX_STATE_OWNER_ID_LENGTH if field_name == "owner_id" else MAX_STATE_KIND_LENGTH
+    if len(value) > limit:
+        raise ValueError(f"State {field_name} exceeds {limit} characters")
+    return value
+
+
+def encode_state_payload(payload: Any) -> bytes:
+    """Validate and encode an opaque JSON payload within the runtime limit."""
+    try:
+        encoded = json.dumps(
+            payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+            allow_nan=False,
+        ).encode()
+    except (TypeError, ValueError) as error:
+        raise StateFormatError("State payload must be valid JSON") from error
+    if len(encoded) > MAX_STATE_PAYLOAD_BYTES:
+        raise StatePayloadLimitError(f"State payload exceeds {MAX_STATE_PAYLOAD_BYTES} bytes")
+    return encoded
+
+
+def decode_state_payload(encoded: bytes | str) -> Any:
+    """Decode a stored JSON payload without silently repairing it."""
+    if isinstance(encoded, str):
+        encoded = encoded.encode()
+    if not isinstance(encoded, bytes):
+        raise StateFormatError("Stored state payload is not valid JSON")
+    if len(encoded) > MAX_STATE_PAYLOAD_BYTES:
+        raise StatePayloadLimitError(f"State payload exceeds {MAX_STATE_PAYLOAD_BYTES} bytes")
+    try:
+        payload = json.loads(encoded)
+        encode_state_payload(payload)
+    except (json.JSONDecodeError, TypeError, UnicodeDecodeError, ValueError) as error:
+        if isinstance(error, StatePayloadLimitError):
+            raise
+        raise StateFormatError("Stored state payload is not valid JSON") from error
+    return payload
+
+
 class RuntimeStore(Protocol):
     """Namespaced durable state and coordination required by YoloP hosts."""
 
@@ -264,6 +367,30 @@ class RuntimeStore(Protocol):
         *,
         expected_revision: str,
     ) -> None: ...
+
+    async def read_state(
+        self,
+        namespace: str,
+        *,
+        owner_id: str,
+        scope: StateScope,
+        scope_id: str,
+        state_kind: str,
+        schema_version: int | None = None,
+    ) -> list[PluginStateEntry]: ...
+
+    async def append_state(
+        self,
+        namespace: str,
+        *,
+        owner_id: str,
+        scope: StateScope,
+        scope_id: str,
+        state_kind: str,
+        schema_version: int,
+        expected_sequence: int,
+        payload: Any,
+    ) -> PluginStateEntry: ...
 
     async def checkout_session(
         self,
@@ -395,6 +522,77 @@ class RuntimeStore(Protocol):
     async def interrupt_expired_runs(self) -> int: ...
 
 
+@dataclass(frozen=True)
+class ScopedState:
+    """Owner-bound access to one namespace and execution scope."""
+
+    store: RuntimeStore
+    namespace: str
+    owner_id: str
+    scope: StateScope
+    scope_id: str
+
+    async def read(
+        self,
+        state_kind: str,
+        *,
+        schema_version: int | None = 1,
+    ) -> list[PluginStateEntry]:
+        return await self.store.read_state(
+            self.namespace,
+            owner_id=self.owner_id,
+            scope=self.scope,
+            scope_id=self.scope_id,
+            state_kind=state_kind,
+            schema_version=schema_version,
+        )
+
+    async def append(
+        self,
+        state_kind: str,
+        payload: Any,
+        *,
+        schema_version: int = 1,
+        expected_sequence: int = 0,
+    ) -> PluginStateEntry:
+        return await self.store.append_state(
+            self.namespace,
+            owner_id=self.owner_id,
+            scope=self.scope,
+            scope_id=self.scope_id,
+            state_kind=state_kind,
+            schema_version=schema_version,
+            expected_sequence=expected_sequence,
+            payload=payload,
+        )
+
+
+@dataclass(frozen=True)
+class ScopedStateContext:
+    """Namespace and execution-bound state handle factory."""
+
+    store: RuntimeStore
+    namespace: str
+    session_id: str
+    run_id: str
+
+    def bind(self, owner_id: str, *, scope: StateScope = StateScope.RUN) -> ScopedState:
+        scope_id = self.run_id if scope is StateScope.RUN else self.session_id
+        return ScopedState(
+            store=self.store,
+            namespace=self.namespace,
+            owner_id=_validate_state_text(owner_id, "owner_id"),
+            scope=scope,
+            scope_id=scope_id,
+        )
+
+    def for_run(self, owner_id: str) -> ScopedState:
+        return self.bind(owner_id, scope=StateScope.RUN)
+
+    def for_session(self, owner_id: str) -> ScopedState:
+        return self.bind(owner_id, scope=StateScope.SESSION)
+
+
 def ensure_session_pin(session: RuntimeSessionSnapshot, expected: ExecutionPin) -> None:
     """Reject execution through configuration other than the session pin."""
     if session.pin != expected:
@@ -465,13 +663,22 @@ __all__ = [
     "RuntimeStore",
     "Runtime",
     "RuntimeStoreSchemaError",
+    "ScopedStateContext",
     "SessionConflictError",
     "SessionFormatError",
     "SessionLockTimeoutError",
     "SessionNotFoundError",
     "SessionPinMismatchError",
+    "PluginStateEntry",
     "ScopedState",
+    "StateFormatError",
+    "StatePayloadLimitError",
+    "StateSchemaError",
+    "StateScope",
+    "StateSequenceConflictError",
     "StoredRunEvent",
+    "decode_state_payload",
+    "encode_state_payload",
     "agent_spec_digest",
     "ensure_session_pin",
     "input_digest",
