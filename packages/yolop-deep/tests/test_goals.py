@@ -91,6 +91,41 @@ async def test_impossible_goal_stops_with_reason(tmp_path: Path) -> None:
     assert len(await runtime.list_runs("tenant", session_id=session.id)) == 2
 
 
+async def test_root_budget_stops_goal_continuation(tmp_path: Path) -> None:
+    store = SQLiteRuntimeStore(tmp_path / "runtime.db")
+    runtime = Runtime(store=store)
+    work_spec = AgentSpec(model="test:model")
+    evaluator_spec = AgentSpec(
+        model="test:evaluator",
+        output_schema={
+            "type": "object",
+            "properties": {"verdict": {"type": "string"}, "reason": {"type": "string"}},
+            "required": ["verdict", "reason"],
+        },
+    )
+    session = await runtime.create_session("tenant", spec=work_spec, model_id="test:model")
+
+    record = await GoalRunner(runtime).start(
+        "tenant",
+        session.id,
+        goal="Stay within the request budget.",
+        spec=work_spec,
+        model=TestModel(custom_output_text="attempted"),
+        model_id="test:model",
+        evaluator_spec=evaluator_spec,
+        evaluator_model=TestModel(custom_output_args={"verdict": "unmet", "reason": "not done"}),
+        evaluator_model_id="test:evaluator",
+        deps=None,
+        deps_type=type(None),
+        budget=RuntimeBudget(request_limit=2, child_run_limit=5, continuation_limit=3),
+        max_turns=3,
+    )
+
+    assert record.status is GoalStatus.EXHAUSTED
+    assert "RunBudgetExceededError" in record.reason
+    assert len(await runtime.list_runs("tenant", session_id=session.id)) == 2
+
+
 async def test_maximum_turns_stops_unmet_goal(tmp_path: Path) -> None:
     store = SQLiteRuntimeStore(tmp_path / "runtime.db")
     runtime = Runtime(store=store)
