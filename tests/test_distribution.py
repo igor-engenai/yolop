@@ -62,6 +62,7 @@ def test_distribution_publishes_current_entry_points() -> None:
             "ToolOutputLimits": "yolop_context:ToolOutputLimits",
             "WarnNearLimits": "yolop_context:WarnNearLimits",
             "Workspace": "yolop_workspace:Workspace",
+            "Planning": "yolop_deep:Planning",
         },
         "yolop.model_providers": {
             "openai-codex": "yolop_providers:create_codex_model",
@@ -95,6 +96,7 @@ def test_public_package_imports_load() -> None:
             "cleanup_session_artifacts",
             "retain_run_artifacts",
         ),
+        "yolop_deep": ("PlanItem", "Planning", "SessionPlanStore", "load_deep_coding_spec"),
         "yolop_duckdb": ("DuckDB", "DuckDBDeps"),
         "yolop_providers": ("CodexOAuth", "create_codex_model"),
         "yolop_runtime": ("ExecutionScope", "Runtime", "RuntimeDeps"),
@@ -117,6 +119,7 @@ def test_distribution_publishes_install_profiles() -> None:
     assert set(package_metadata.get_all("Provides-Extra") or ()) == {
         "all",
         "context",
+        "deep",
         "duckdb",
         "openai",
         "providers",
@@ -128,6 +131,7 @@ def test_distribution_publishes_install_profiles() -> None:
     requirements = package_metadata.get_all("Requires-Dist") or ()
     expected_profile_dependencies = {
         "context": {"yolop-context"},
+        "deep": {"yolop-deep"},
         "duckdb": {"yolop-duckdb"},
         "openai": {"pydantic-ai-slim[openai]"},
         "providers": {"yolop-providers"},
@@ -137,6 +141,7 @@ def test_distribution_publishes_install_profiles() -> None:
         "all": {
             "pydantic-ai-slim[openai]",
             "yolop-context",
+            "yolop-deep",
             "yolop-duckdb",
             "yolop-providers",
             "yolop-runtime",
