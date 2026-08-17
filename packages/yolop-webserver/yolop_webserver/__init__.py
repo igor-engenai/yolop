@@ -13,8 +13,8 @@ from uuid import uuid4
 
 from fastapi import FastAPI, Header, Request
 from fastapi.responses import JSONResponse, Response
-from pydantic import BaseModel, Field, TypeAdapter
-from pydantic_ai import AgentRunResultEvent, AgentSpec, AgentStreamEvent
+from pydantic import BaseModel, Field
+from pydantic_ai import AgentSpec
 from pydantic_ai.messages import ModelMessagesTypeAdapter
 from pydantic_ai.models import KnownModelName, Model
 from pydantic_ai.usage import RunUsage
@@ -27,6 +27,7 @@ from yolop_runtime import (
     RunNotFoundError,
     RunStateError,
     RunStatus,
+    Runtime,
     RuntimeRunSnapshot,
     RuntimeSessionSnapshot,
     RuntimeStore,
@@ -36,14 +37,12 @@ from yolop_runtime import (
     SessionNotFoundError,
     SessionPinMismatchError,
     StoredRunEvent,
-    ensure_session_pin,
     validate_namespace,
 )
 
-from yolop import ProviderCatalog, Yolop
+from yolop import ProviderCatalog
 
 _LOGGER = logging.getLogger(__name__)
-_STREAM_EVENT_ADAPTER = TypeAdapter(AgentStreamEvent)
 
 type NamespaceResolver = Callable[[Request], str | Awaitable[str]]
 type DepsResolver[DepsT] = Callable[[str, str], DepsT | Awaitable[DepsT]]
@@ -201,10 +200,15 @@ def create_app[DepsT](
     provider_catalog: ProviderCatalog | None = None,
 ) -> FastAPI:
     """Create a FastAPI application for one host-selected AgentSpec."""
-    runtime = Yolop(provider_catalog=provider_catalog)
-    runtime.provider_catalog.validate_spec(agent_spec)
-    pin = _execution_pin(agent_spec, model=model, model_id=model_id)
     configured_limits = limits or RunLimits()
+    runtime = Runtime(
+        store=runtime_store,
+        provider_catalog=provider_catalog,
+        session_lock_timeout=configured_limits.session_lock_timeout,
+        lease_seconds=configured_limits.lease_seconds,
+    )
+    runtime.kernel.provider_catalog.validate_spec(agent_spec)
+    pin = _execution_pin(agent_spec, model=model, model_id=model_id)
 
     async def execute_run(
         claimed: RuntimeRunSnapshot,
@@ -219,50 +223,23 @@ def create_app[DepsT](
             )
         )
         try:
-            async with runtime_store.lock_session(
-                claimed.namespace,
-                claimed.session_id,
-                timeout=configured_limits.session_lock_timeout,
-            ):
-                async with active_runs:
-                    session = await runtime_store.load_session(
-                        claimed.namespace,
-                        claimed.session_id,
-                    )
-                    ensure_session_pin(session, pin)
-                    deps = await _resolve_deps(
-                        deps_resolver,
-                        claimed.namespace,
-                        claimed.session_id,
-                    )
-                    async with runtime.run(
-                        agent_spec,
-                        claimed.prompt,
-                        deps=deps,
-                        deps_type=deps_type,
-                        model=model,
-                        message_history=session.messages,
-                    ) as agent_run:
-                        async for event in agent_run:
-                            if isinstance(event, AgentRunResultEvent):
-                                continue
-                            await runtime_store.append_run_event(
-                                claimed.namespace,
-                                claimed.id,
-                                owner_id=claimed.owner_id,
-                                event=event.event_kind,
-                                data=_STREAM_EVENT_ADAPTER.dump_json(event).decode(),
-                            )
-                    assert agent_run.result is not None
-                    await runtime_store.complete_run(
-                        claimed.namespace,
-                        claimed.id,
-                        owner_id=claimed.owner_id,
-                        expected_session_revision=session.revision,
-                        messages=agent_run.all_messages(),
-                        output=agent_run.result.output,
-                        usage=agent_run.result.usage,
-                    )
+            async with active_runs:
+                deps = await _resolve_deps(
+                    deps_resolver,
+                    claimed.namespace,
+                    claimed.session_id,
+                )
+                await runtime.execute_claimed(
+                    claimed.namespace,
+                    claimed,
+                    prompt=claimed.prompt,
+                    spec=agent_spec,
+                    model=model,
+                    model_id=pin.model_id,
+                    deps=deps,
+                    deps_type=deps_type,
+                    cancel_on_task_cancel=False,
+                )
         except asyncio.CancelledError:
             raise
         except SessionLockTimeoutError as error:
@@ -304,32 +281,24 @@ def create_app[DepsT](
     @app.post("/v1/sessions", response_model=SessionReference, status_code=201)
     async def create_session(request: Request) -> SessionReference:
         namespace = await _resolve_namespace(namespace_resolver, request)
-        return _session_reference(await runtime_store.create_session(namespace, pin=pin))
+        return _session_reference(
+            await runtime.create_session(namespace, spec=agent_spec, model_id=pin.model_id)
+        )
 
     @app.get("/v1/sessions", response_model=SessionListResponse)
     async def list_sessions(request: Request) -> SessionListResponse:
         namespace = await _resolve_namespace(namespace_resolver, request)
-        return SessionListResponse(sessions=await runtime_store.list_sessions(namespace))
+        return SessionListResponse(sessions=await runtime.list_sessions(namespace))
 
     @app.get("/v1/sessions/{session_id}", response_model=SessionResponse)
     async def load_session(request: Request, session_id: str) -> SessionResponse:
         namespace = await _resolve_namespace(namespace_resolver, request)
-        return _session_response(await runtime_store.load_session(namespace, session_id))
+        return _session_response(await runtime.load_session(namespace, session_id))
 
     @app.delete("/v1/sessions/{session_id}", status_code=204)
     async def delete_session(request: Request, session_id: str) -> Response:
         namespace = await _resolve_namespace(namespace_resolver, request)
-        async with runtime_store.lock_session(
-            namespace,
-            session_id,
-            timeout=configured_limits.session_lock_timeout,
-        ):
-            session = await runtime_store.load_session(namespace, session_id)
-            await runtime_store.delete_session(
-                namespace,
-                session_id,
-                expected_revision=session.revision,
-            )
+        await runtime.delete_session(namespace, session_id)
         return Response(status_code=204)
 
     @app.post("/v1/sessions/{session_id}/runs", response_model=RunResponse)
@@ -344,13 +313,14 @@ def create_app[DepsT](
     ) -> RunResponse:
         namespace = await _resolve_namespace(namespace_resolver, request)
         await runtime_store.interrupt_expired_runs()
-        initial_session = await runtime_store.load_session(namespace, session_id)
-        ensure_session_pin(initial_session, pin)
-        reservation = await runtime_store.reserve_run(
+        reservation = await runtime.reserve_run(
             namespace,
             session_id,
+            run_request.prompt,
+            spec=agent_spec,
+            model=model,
+            model_id=pin.model_id,
             idempotency_key=idempotency_key,
-            prompt=run_request.prompt,
             max_pending=configured_limits.max_pending_per_session,
         )
         await supervisor.start(namespace, reservation.run.id)
@@ -376,13 +346,14 @@ def create_app[DepsT](
     ) -> EventSourceResponse:
         namespace = await _resolve_namespace(namespace_resolver, request)
         await runtime_store.interrupt_expired_runs()
-        initial_session = await runtime_store.load_session(namespace, session_id)
-        ensure_session_pin(initial_session, pin)
-        reservation = await runtime_store.reserve_run(
+        reservation = await runtime.reserve_run(
             namespace,
             session_id,
+            run_request.prompt,
+            spec=agent_spec,
+            model=model,
+            model_id=pin.model_id,
             idempotency_key=idempotency_key,
-            prompt=run_request.prompt,
             max_pending=configured_limits.max_pending_per_session,
         )
         await supervisor.start(namespace, reservation.run.id)
@@ -427,13 +398,21 @@ async def _fail_owned_run(
     error_detail: str,
 ) -> None:
     assert run.owner_id is not None
-    await runtime_store.fail_run(
-        run.namespace,
-        run.id,
-        owner_id=run.owner_id,
-        error_code=error_code,
-        error_detail=error_detail,
-    )
+    current = await runtime_store.load_run(run.namespace, run.id)
+    if current.status not in {RunStatus.ACCEPTED, RunStatus.RUNNING}:
+        return
+    try:
+        await runtime_store.fail_run(
+            run.namespace,
+            run.id,
+            owner_id=run.owner_id,
+            error_code=error_code,
+            error_detail=error_detail,
+        )
+    except RunStateError:
+        current = await runtime_store.load_run(run.namespace, run.id)
+        if current.status in {RunStatus.ACCEPTED, RunStatus.RUNNING}:
+            raise
 
 
 async def _wait_for_terminal_run(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
@@ -10,7 +11,7 @@ from pydantic import TypeAdapter
 from pydantic_ai import AgentSpec, AgentStreamEvent
 from pydantic_ai.agent import EventStreamHandler
 from pydantic_ai.exceptions import RunCancelled
-from pydantic_ai.messages import ModelMessage, UserContent
+from pydantic_ai.messages import ModelMessage, ModelResponse, UserContent
 from pydantic_ai.models import KnownModelName, Model
 from pydantic_ai.usage import UsageLimits
 
@@ -23,9 +24,11 @@ from . import (
     IdempotencyConflictError,
     RunCompletion,
     RunRelation,
+    RunReservation,
     RunStateError,
     RunStatus,
     RuntimeBudget,
+    RuntimeContextSink,
     RuntimeDeadlineExceededError,
     RuntimeDeps,
     RuntimeEventSink,
@@ -34,6 +37,7 @@ from . import (
     RuntimeSessionSnapshot,
     RuntimeStore,
     ScopedStateContext,
+    SessionLockTimeoutError,
     ensure_session_pin,
 )
 
@@ -90,7 +94,7 @@ class Runtime[HostDepsT]:
             expected_revision=session.revision,
         )
 
-    async def run(
+    async def reserve_run(
         self,
         namespace: str,
         session_id: str,
@@ -99,19 +103,14 @@ class Runtime[HostDepsT]:
         spec: AgentSpec | dict[str, Any],
         model: Model | KnownModelName | str | None = None,
         model_id: str | None = None,
-        usage_limits: UsageLimits | None = None,
         root_budget: RuntimeBudget | None = None,
         parent_run_id: str | None = None,
         relation: RunRelation | None = None,
-        deps: HostDepsT,
-        deps_type: type[HostDepsT],
         idempotency_key: str,
-        event_sink: RuntimeEventSink | None = None,
-        follow_up_sink: RuntimeFollowUpSink | None = None,
         max_pending: int | None = None,
         initiator: str = "user",
-    ) -> RunCompletion:
-        """Execute one durable run and return its terminal state and session."""
+    ) -> RunReservation:
+        """Admit one Run and persist its ancestry and initial history."""
         self.kernel.provider_catalog.validate_spec(spec)
         resolved_model_id = _model_id(spec, model=model, model_id=model_id)
         session = await self.store.load_session(namespace, session_id)
@@ -121,6 +120,14 @@ class Runtime[HostDepsT]:
         )
         prompt_text = _prompt_text(prompt)
         effective_parent_id = parent_run_id or session.head_run_id
+        if effective_parent_id is None:
+            pending_runs = [
+                run
+                for run in await self.store.list_runs(namespace, session_id=session_id)
+                if run.status in {RunStatus.ACCEPTED, RunStatus.RUNNING}
+            ]
+            if pending_runs:
+                effective_parent_id = pending_runs[-1].id
         parent = (
             await self.store.load_run(namespace, effective_parent_id)
             if effective_parent_id is not None
@@ -146,7 +153,7 @@ class Runtime[HostDepsT]:
         )
         if root_deadline is not None and root_deadline <= self.clock():
             raise RuntimeDeadlineExceededError("Root wall deadline has passed")
-        reservation = await self.store.reserve_run(
+        return await self.store.reserve_run(
             namespace,
             session_id,
             idempotency_key=idempotency_key,
@@ -158,7 +165,45 @@ class Runtime[HostDepsT]:
             root_budget=root_budget,
             initiator=initiator,
             full_messages=base_full_messages,
-            active_messages=session.messages,
+            active_messages=base_active_messages,
+        )
+
+    async def run(
+        self,
+        namespace: str,
+        session_id: str,
+        prompt: str | Sequence[UserContent] | None,
+        *,
+        spec: AgentSpec | dict[str, Any],
+        model: Model | KnownModelName | str | None = None,
+        model_id: str | None = None,
+        usage_limits: UsageLimits | None = None,
+        root_budget: RuntimeBudget | None = None,
+        parent_run_id: str | None = None,
+        relation: RunRelation | None = None,
+        deps: HostDepsT,
+        deps_type: type[HostDepsT],
+        idempotency_key: str,
+        event_sink: RuntimeEventSink | None = None,
+        context_sink: RuntimeContextSink | None = None,
+        follow_up_sink: RuntimeFollowUpSink | None = None,
+        max_pending: int | None = None,
+        initiator: str = "user",
+    ) -> RunCompletion:
+        """Execute one durable run and return its terminal state and session."""
+        reservation = await self.reserve_run(
+            namespace,
+            session_id,
+            prompt,
+            spec=spec,
+            model=model,
+            model_id=model_id,
+            root_budget=root_budget,
+            parent_run_id=parent_run_id,
+            relation=relation,
+            idempotency_key=idempotency_key,
+            max_pending=max_pending,
+            initiator=initiator,
         )
         if not reservation.created:
             if reservation.run.status in _TERMINAL_STATUSES:
@@ -167,27 +212,81 @@ class Runtime[HostDepsT]:
                 f"Run {reservation.run.id!r} is already active for this idempotency key"
             )
 
-        owner_id = str(uuid4())
         claimed = await self.store.claim_run(
             namespace,
             reservation.run.id,
-            owner_id=owner_id,
+            owner_id=str(uuid4()),
             lease_seconds=self.lease_seconds,
         )
+        return await self.execute_claimed(
+            namespace,
+            claimed,
+            prompt=prompt,
+            spec=spec,
+            model=model,
+            model_id=model_id,
+            deps=deps,
+            deps_type=deps_type,
+            usage_limits=usage_limits,
+            event_sink=event_sink,
+            context_sink=context_sink,
+            follow_up_sink=follow_up_sink,
+        )
+
+    async def execute_claimed(
+        self,
+        namespace: str,
+        claimed: RuntimeRunSnapshot,
+        *,
+        prompt: str | Sequence[UserContent] | None,
+        spec: AgentSpec | dict[str, Any],
+        model: Model | KnownModelName | str | None = None,
+        model_id: str | None = None,
+        deps: HostDepsT,
+        deps_type: type[HostDepsT],
+        usage_limits: UsageLimits | None = None,
+        event_sink: RuntimeEventSink | None = None,
+        context_sink: RuntimeContextSink | None = None,
+        follow_up_sink: RuntimeFollowUpSink | None = None,
+        cancel_on_task_cancel: bool = True,
+    ) -> RunCompletion:
+        """Execute an already claimed Run for a host supervisor."""
+        if claimed.owner_id is None:
+            raise RunStateError(f"Run {claimed.id!r} has no owner")
+        self.kernel.provider_catalog.validate_spec(spec)
+        resolved_model_id = _model_id(spec, model=model, model_id=model_id)
+        session = await self.store.load_session(namespace, claimed.session_id)
+        ensure_session_pin(
+            session,
+            ExecutionPin.from_spec(spec, model_id=resolved_model_id),
+        )
+        parent = (
+            await self.store.load_run(namespace, claimed.parent_run_id)
+            if claimed.parent_run_id is not None
+            else None
+        )
+        if parent is not None and parent.status in _TERMINAL_STATUSES:
+            base_full_messages = list(parent.full_messages)
+            base_active_messages = list(parent.active_messages)
+        else:
+            base_full_messages = list(claimed.full_messages)
+            base_active_messages = list(claimed.active_messages)
+        root_deadline = await self._root_deadline_for_run(namespace, claimed)
+        owner_id = claimed.owner_id
         scope = ExecutionScope(
             namespace=namespace,
-            session_id=session_id,
+            session_id=claimed.session_id,
             run_id=claimed.id,
             parent_run_id=claimed.parent_run_id,
             root_run_id=claimed.root_run_id,
-            initiator=initiator,
+            initiator=claimed.initiator,
         )
         runtime_deps = RuntimeDeps(
             scope=scope,
             state=ScopedStateContext(
                 store=self.store,
                 namespace=namespace,
-                session_id=session_id,
+                session_id=claimed.session_id,
                 run_id=claimed.id,
             ),
             event_sink=event_sink,
@@ -198,11 +297,19 @@ class Runtime[HostDepsT]:
         try:
             async with self.store.lock_session(
                 namespace,
-                session_id,
+                claimed.session_id,
                 timeout=self.session_lock_timeout,
             ):
-                current = await self.store.load_session(namespace, session_id)
+                current = await self.store.load_session(namespace, claimed.session_id)
                 current_session = current
+                if claimed.parent_run_id is not None:
+                    latest_parent = await self.store.load_run(
+                        namespace,
+                        claimed.parent_run_id,
+                    )
+                    if latest_parent.status in _TERMINAL_STATUSES:
+                        base_full_messages = list(latest_parent.full_messages)
+                        base_active_messages = list(latest_parent.active_messages)
                 ensure_session_pin(
                     current,
                     ExecutionPin.from_spec(spec, model_id=resolved_model_id),
@@ -217,6 +324,7 @@ class Runtime[HostDepsT]:
                             run_id=claimed.id,
                             owner_id=owner_id,
                             event_sink=event_sink,
+                            context_sink=context_sink,
                         ),
                         deps=runtime_deps,
                         deps_type=RuntimeDeps,
@@ -246,15 +354,13 @@ class Runtime[HostDepsT]:
                     raise RuntimeDeadlineExceededError(
                         "Root wall deadline passed during execution"
                     ) from error
-                new_messages = result.new_messages()
-                active_messages = result.all_messages()
                 completion = await self.store.complete_run(
                     namespace,
                     claimed.id,
                     owner_id=owner_id,
                     expected_session_revision=current.revision,
-                    full_messages=[*base_full_messages, *new_messages],
-                    active_messages=active_messages,
+                    full_messages=[*base_full_messages, *result.new_messages()],
+                    active_messages=result.all_messages(),
                     output=result.output,
                     usage=result.usage,
                 )
@@ -269,6 +375,8 @@ class Runtime[HostDepsT]:
                 cancelled=cancelled,
             )
         except asyncio.CancelledError as cancelled:
+            if not cancel_on_task_cancel:
+                raise
             partial = RunCancelled.from_cancellation(cancelled)
             if partial is not None:
                 await self._store_cancelled_run(
@@ -289,6 +397,15 @@ class Runtime[HostDepsT]:
             raise
         except RuntimeDeadlineExceededError:
             raise
+        except SessionLockTimeoutError as error:
+            await self.store.fail_run(
+                namespace,
+                claimed.id,
+                owner_id=owner_id,
+                error_code=error.code,
+                error_detail=str(error),
+            )
+            raise
         except Exception:
             await self.store.fail_run(
                 namespace,
@@ -298,6 +415,16 @@ class Runtime[HostDepsT]:
                 error_detail="Agent run failed",
             )
             raise
+
+    async def _root_deadline_for_run(
+        self,
+        namespace: str,
+        run: RuntimeRunSnapshot,
+    ) -> datetime | None:
+        if run.root_run_id is None:
+            return None
+        snapshot = await self.store.load_root_budget(namespace, run.root_run_id)
+        return snapshot.budget.wall_deadline if snapshot is not None else None
 
     async def _root_deadline(
         self,
@@ -322,8 +449,11 @@ class Runtime[HostDepsT]:
         base_full_messages: Sequence[ModelMessage],
         cancelled: RunCancelled,
     ) -> RunCompletion:
-        full_messages = [*base_full_messages, *cancelled.new_messages()]
-        active_messages = cancelled.all_messages()
+        full_messages = [
+            *base_full_messages,
+            *_interrupt_tool_calls(cancelled.new_messages()),
+        ]
+        active_messages = _interrupt_tool_calls(cancelled.all_messages())
         run = await self.store.cancel_run(
             namespace,
             run_id,
@@ -402,6 +532,17 @@ class Runtime[HostDepsT]:
         return RunCompletion(session=session, run=run)
 
 
+def _interrupt_tool_calls(messages: Sequence[ModelMessage]) -> list[ModelMessage]:
+    normalized = list(messages)
+    for index in range(len(normalized) - 1, -1, -1):
+        message = normalized[index]
+        if isinstance(message, ModelResponse):
+            if message.tool_calls and message.state != "interrupted":
+                normalized[index] = replace(message, state="interrupted")
+            break
+    return normalized
+
+
 def _event_handler(
     store: RuntimeStore,
     *,
@@ -409,8 +550,11 @@ def _event_handler(
     run_id: str,
     owner_id: str,
     event_sink: RuntimeEventSink | None,
+    context_sink: RuntimeContextSink | None,
 ) -> EventStreamHandler[Any]:
-    async def handle(_context: Any, events: Any) -> None:
+    async def handle(context: Any, events: Any) -> None:
+        if context_sink is not None:
+            await context_sink.set_context(context)
         async for event in events:
             if event_sink is not None:
                 await event_sink.emit(event)

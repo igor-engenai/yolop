@@ -1,12 +1,11 @@
 import asyncio
 import logging
-from collections.abc import AsyncIterable, Callable, Sequence
-from dataclasses import replace
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from pydantic_ai import AgentSpec, AgentStreamEvent, EnqueuedMessagesEvent, RunContext
-from pydantic_ai.exceptions import RunCancelled
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
@@ -19,6 +18,9 @@ from pydantic_ai.models import KnownModelName, Model
 from pydantic_ai.run import EnqueueContent
 from yolop_runtime import (
     ExecutionPin,
+    Runtime,
+    RuntimeContextSink,
+    RuntimeEventSink,
     RuntimeSessionSnapshot,
     RuntimeStore,
     SessionConflictError,
@@ -26,7 +28,7 @@ from yolop_runtime import (
     ensure_session_pin,
 )
 
-from yolop import ProviderCatalog, Yolop
+from yolop import ProviderCatalog
 
 from .auth import AuthProvider, load_auth_providers
 from .files import FileReferenceError, prepare_prompt
@@ -35,7 +37,6 @@ from .selection import SelectionOption
 from .textual_app import TextualTerminal
 
 _LOGGER = logging.getLogger(__name__)
-_SESSION_LOCK_TIMEOUT = 30.0
 _TERMINAL_FACTORY = TextualTerminal
 _AUTH_PROVIDER_LOADER = load_auth_providers
 _PROVIDER_INSTALL_HINT = (
@@ -61,14 +62,14 @@ async def run_tui[DepsT](
     provider_catalog: ProviderCatalog | None = None,
 ) -> None:
     """Run the full-screen Textual host until the user exits."""
-    runtime = Yolop(provider_catalog=provider_catalog)
-    runtime.provider_catalog.validate_spec(spec)
+    runtime = Runtime(store=store, provider_catalog=provider_catalog)
+    runtime.kernel.provider_catalog.validate_spec(spec)
     working_directory = (cwd or Path.cwd()).expanduser().resolve()
     pin = _execution_pin(spec, model=model, model_id=model_id)
     session = (
-        await store.load_session(namespace, session_id)
+        await runtime.load_session(namespace, session_id)
         if session_id is not None
-        else await store.create_session(namespace, pin=pin)
+        else await runtime.create_session(namespace, spec=spec, model_id=pin.model_id)
     )
     ensure_session_pin(session, pin)
     transcript = Transcript.from_messages(session.messages)
@@ -96,7 +97,7 @@ async def run_tui[DepsT](
 
     def submit(text: str) -> None:
         command = text.strip()
-        if active_turn is None:
+        if active_turn is None or active_turn.cancelling:
             submissions.put_nowait(text)
         elif command == "/help":
             transcript.add_notice(_HELP_TEXT)
@@ -144,7 +145,11 @@ async def run_tui[DepsT](
             if command == "/quit":
                 return
             if command == "/new":
-                session = await store.create_session(namespace, pin=pin)
+                session = await runtime.create_session(
+                    namespace,
+                    spec=spec,
+                    model_id=pin.model_id,
+                )
                 transcript.reset(session.messages)
                 transcript.add_notice(f"New session: {session.id}")
                 render_transcript()
@@ -155,7 +160,7 @@ async def run_tui[DepsT](
                     await _session_options(store, namespace=namespace, pin=pin)
                 )
                 if selected is not None:
-                    session = await store.load_session(namespace, selected)
+                    session = await runtime.load_session(namespace, selected)
                     ensure_session_pin(session, pin)
                     transcript.reset(session.messages)
                     transcript.add_notice(f"Resumed session: {session.id}")
@@ -256,7 +261,6 @@ async def run_tui[DepsT](
                     spec,
                     prompt=prompt,
                     session=session,
-                    store=store,
                     namespace=namespace,
                     pin=pin,
                     deps=deps,
@@ -273,7 +277,7 @@ async def run_tui[DepsT](
             except asyncio.CancelledError:
                 raise
             except SessionConflictError:
-                session = await store.load_session(namespace, session.id)
+                session = await runtime.load_session(namespace, session.id)
                 transcript.reset(session.messages)
                 transcript.add_error("Session changed; the local run was not saved")
                 render_transcript()
@@ -302,12 +306,11 @@ async def run_tui[DepsT](
 
 
 async def _run_turn[DepsT](
-    runtime: Yolop,
+    runtime: Runtime[DepsT],
     spec: AgentSpec,
     *,
     prompt: str | list[UserContent],
     session: RuntimeSessionSnapshot,
-    store: RuntimeStore,
     namespace: str,
     pin: ExecutionPin,
     deps: DepsT,
@@ -320,84 +323,54 @@ async def _run_turn[DepsT](
     render_transcript: Callable[[], None],
     refresh_status: Callable[[], None],
 ) -> RuntimeSessionSnapshot:
-    async with store.lock_session(
-        namespace,
-        session.id,
-        timeout=_SESSION_LOCK_TIMEOUT,
-    ):
-        loaded = await store.load_session(namespace, session.id)
-        ensure_session_pin(loaded, pin)
-        active: _ActiveTurn | None = None
-        try:
-            try:
+    active: _ActiveTurn | None = None
 
-                async def handle_events(
-                    context: RunContext[DepsT],
-                    events: AsyncIterable[AgentStreamEvent],
-                ) -> None:
-                    nonlocal active
-                    if active is None:
-                        active = _ActiveTurn(
-                            context,
-                            cwd=cwd,
-                            terminal=terminal,
-                            transcript=transcript,
-                            render_transcript=render_transcript,
-                            on_change=refresh_status,
-                        )
-                        set_active(active)
-                    else:
-                        active.set_context(context)
-                    async for event in events:
-                        if isinstance(event, EnqueuedMessagesEvent):
-                            active.mark_delivered(event.enqueue_id)
-                        elif transcript.apply(event):
-                            render_transcript()
-
-                result = await runtime.execute(
-                    spec,
-                    prompt,
-                    event_stream_handler=handle_events,
-                    deps=deps,
-                    deps_type=deps_type,
-                    model=model,
-                    message_history=loaded.messages,
+    class TurnObserver(RuntimeContextSink, RuntimeEventSink):
+        async def set_context(self, context: RunContext[Any]) -> None:
+            nonlocal active
+            if active is None:
+                active = _ActiveTurn(
+                    context,
+                    cwd=cwd,
+                    terminal=terminal,
+                    transcript=transcript,
+                    render_transcript=render_transcript,
+                    on_change=refresh_status,
                 )
-                messages = result.all_messages()
-            except RunCancelled as cancelled:
-                messages = _cancelled_messages(cancelled)
-            saved = await store.replace_session(
-                namespace,
-                loaded.id,
-                expected_revision=loaded.revision,
-                messages=messages,
-            )
-        finally:
-            if active is not None:
-                active.restore_undelivered()
-            set_active(None)
-    transcript.reset(saved.messages)
+                set_active(active)
+            else:
+                active.set_context(context)
+
+        async def emit(self, event: AgentStreamEvent) -> None:
+            if active is None:
+                return
+            if isinstance(event, EnqueuedMessagesEvent):
+                active.mark_delivered(event.enqueue_id)
+            elif transcript.apply(event):
+                render_transcript()
+
+    observer = TurnObserver()
+    try:
+        completion = await runtime.run(
+            namespace,
+            session.id,
+            prompt,
+            spec=spec,
+            model=model,
+            model_id=pin.model_id,
+            deps=deps,
+            deps_type=deps_type,
+            idempotency_key=f"tui:{uuid4()}",
+            event_sink=observer,
+            context_sink=observer,
+        )
+    finally:
+        if active is not None:
+            active.restore_undelivered()
+        set_active(None)
+    transcript.reset(completion.session.messages)
     render_transcript()
-    return saved
-
-
-def _cancelled_messages(cancelled: RunCancelled) -> list[ModelMessage]:
-    messages = cancelled.all_messages()
-    last_response_index = next(
-        (
-            index
-            for index in range(len(messages) - 1, -1, -1)
-            if isinstance(messages[index], ModelResponse)
-        ),
-        None,
-    )
-    if last_response_index is None:
-        return messages
-    response = messages[last_response_index]
-    assert isinstance(response, ModelResponse)
-    if response.tool_calls and response.state != "interrupted":
-        messages[last_response_index] = replace(response, state="interrupted")
-    return messages
+    return completion.session
 
 
 def _execution_pin(
@@ -507,6 +480,10 @@ class _ActiveTurn:
     def state(self) -> str:
         return "cancelling" if self._cancelling else "running"
 
+    @property
+    def cancelling(self) -> bool:
+        return self._cancelling
+
     def enqueue(self, text: str) -> None:
         try:
             prompt = prepare_prompt(text, cwd=self._cwd)
@@ -534,7 +511,7 @@ class _ActiveTurn:
 
     def cancel(self) -> None:
         self._cancelling = True
-        self._on_change()
+        self.restore_undelivered()
         self._context.cancel()
 
     def restore_undelivered(self) -> None:

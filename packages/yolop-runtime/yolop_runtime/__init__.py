@@ -152,6 +152,12 @@ class RuntimeEventSink(Protocol):
     async def emit(self, event: AgentStreamEvent) -> None: ...
 
 
+class RuntimeContextSink(Protocol):
+    """Receives the native RunContext for steering an active Run."""
+
+    async def set_context(self, context: Any) -> None: ...
+
+
 class RuntimeFollowUpSink(Protocol):
     """Receives host follow-up prompts for the current execution."""
 
@@ -737,6 +743,7 @@ __all__ = [
     "RuntimeBudget",
     "RuntimeDeadlineExceededError",
     "RuntimeDeps",
+    "RuntimeContextSink",
     "RuntimeEventSink",
     "RuntimeFollowUpSink",
     "RuntimeStore",
