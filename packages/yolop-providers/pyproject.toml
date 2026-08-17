@@ -9,6 +9,7 @@ description = "Optional model providers for YoloP"
 requires-python = ">=3.12"
 dependencies = [
     "filelock>=3.20.0,<4",
+    "httpx>=0.28.1,<0.29",
     "pydantic>=2.12.0,<3",
 ]
 

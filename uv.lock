@@ -1267,12 +1267,14 @@ version = "0.1.0"
 source = { editable = "packages/yolop-providers" }
 dependencies = [
     { name = "filelock" },
+    { name = "httpx" },
     { name = "pydantic" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "filelock", specifier = ">=3.20.0,<4" },
+    { name = "httpx", specifier = ">=0.28.1,<0.29" },
     { name = "pydantic", specifier = ">=2.12.0,<3" },
 ]
 

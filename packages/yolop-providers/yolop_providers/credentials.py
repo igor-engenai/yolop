@@ -1,12 +1,15 @@
 import json
+import math
 import os
 import stat
 import tempfile
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from filelock import FileLock
+from filelock import AsyncFileLock, FileLock
 from pydantic import BaseModel, ConfigDict, SecretStr, ValidationError, field_validator
 
 _DOCUMENT_VERSION = 1
@@ -33,6 +36,13 @@ class OAuthCredential(BaseModel):
             raise ValueError("OAuth tokens cannot be empty")
         return value
 
+    @field_validator("expires_at")
+    @classmethod
+    def _expiry_is_finite(cls, value: float) -> float:
+        if not math.isfinite(value):
+            raise ValueError("OAuth expiry must be finite")
+        return value
+
     @field_validator("account_id")
     @classmethod
     def _account_id_is_not_empty(cls, value: str) -> str:
@@ -47,12 +57,29 @@ class CredentialStatus:
     expires_at: float | None
 
 
+class _CredentialTransaction:
+    def __init__(self, credentials: dict[str, OAuthCredential]) -> None:
+        self.credentials = credentials
+        self.changed = False
+
+    def load_oauth(self, provider: str) -> OAuthCredential | None:
+        _validate_provider(provider)
+        return self.credentials.get(provider)
+
+    def save_oauth(self, provider: str, credential: OAuthCredential) -> None:
+        _validate_provider(provider)
+        self.credentials[provider] = credential
+        self.changed = True
+
+
 class CredentialStore:
     """Persist provider credentials in one private, atomically replaced JSON file."""
 
     def __init__(self, path: Path | None = None) -> None:
         self.path = (path or default_auth_path()).expanduser()
-        self._lock = FileLock(f"{self.path}.lock")
+        lock_path = f"{self.path}.lock"
+        self._lock = FileLock(lock_path)
+        self._async_lock = AsyncFileLock(lock_path)
 
     def save_oauth(self, provider: str, credential: OAuthCredential) -> None:
         _validate_provider(provider)
@@ -88,6 +115,16 @@ class CredentialStore:
             if removed:
                 self._write_credentials(credentials)
             return removed
+
+    @asynccontextmanager
+    async def transaction(self) -> AsyncIterator[_CredentialTransaction]:
+        """Hold the process lock across one read/optional-write credential transaction."""
+        self._ensure_directory()
+        async with self._async_lock:
+            transaction = _CredentialTransaction(self._read_credentials())
+            yield transaction
+            if transaction.changed:
+                self._write_credentials(transaction.credentials)
 
     def _ensure_directory(self) -> None:
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
