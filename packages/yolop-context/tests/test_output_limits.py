@@ -16,6 +16,7 @@ from yolop_context import (
     ScopedOverflowStore,
     ToolOutputLimits,
     cleanup_session_artifacts,
+    retain_run_artifacts,
 )
 
 
@@ -38,12 +39,26 @@ class MemoryStore:
 class RecordingRegistry:
     records: list[tuple[ContextScope, str, int]] = field(default_factory=list)
     deleted: list[tuple[str, str]] = field(default_factory=list)
+    retained: list[ContextScope] = field(default_factory=list)
 
     async def record_artifact(self, scope: ContextScope, handle: str, *, size: int) -> None:
         self.records.append((scope, handle, size))
 
     async def delete_session_artifacts(self, namespace: str, session_id: str) -> None:
         self.deleted.append((namespace, session_id))
+
+    async def retain_run_artifacts(self, scope: ContextScope) -> None:
+        self.retained.append(scope)
+
+
+def test_output_limits_from_spec_rejects_storage_configuration() -> None:
+    with pytest.raises(ValueError, match="unsupported"):
+        ToolOutputLimits.from_spec(store="/private/path")
+
+    configured = ToolOutputLimits.from_spec(
+        bands=[{"over": 10, "action": "spill", "fallback": "truncate"}]
+    )
+    assert configured.bands[0].action == "spill"
 
 
 def _scope() -> SimpleNamespace:
@@ -101,9 +116,9 @@ async def test_large_text_spills_with_bounded_preview_and_records_ownership() ->
         args={},
         result="abcdefghij",
     )
-    assert isinstance(result, str)
-    assert "stored to handle" in result
-    assert "abcdefghij" not in result
+    assert isinstance(result, ToolReturn)
+    assert "stored to handle" in str(result.return_value)
+    assert "abcdefghij" not in str(result.return_value)
     assert len(store.values) == 1
     assert registry.records[0][2] == 10
 
@@ -161,6 +176,8 @@ async def test_session_cleanup_is_explicit_and_does_not_delete_completed_run_dat
     registry = RecordingRegistry()
     deps = SimpleNamespace(artifact_registry=registry)
 
+    await retain_run_artifacts(deps, _scope())
+    assert registry.retained == [_scope()]
     await cleanup_session_artifacts(deps, namespace="tenant", session_id="session")
     assert registry.deleted == [("tenant", "session")]
 
@@ -178,4 +195,11 @@ async def test_scoped_store_records_owner_with_an_explicit_registry() -> None:
     )
 
     await scoped.write("call", b"payload")
-    assert registry.records == [(_scope(), registry.records[0][1], 7)]
+    assert len(registry.records) == 1
+    recorded_scope, _handle, size = registry.records[0]
+    assert (recorded_scope.namespace, recorded_scope.session_id, recorded_scope.run_id) == (
+        "tenant",
+        "session",
+        "run",
+    )
+    assert size == 7

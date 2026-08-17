@@ -78,13 +78,18 @@ def test_public_package_imports_load() -> None:
     public_imports = {
         "yolop": ("ProviderCatalog", "ProviderManifest", "Yolop"),
         "yolop_context": (
+            "ArtifactRegistry",
             "Context",
             "ContextDeps",
             "StuckLoop",
             "StuckLoopError",
+            "OutputBand",
             "ScopedOverflowStore",
+            "ToolOutputLimits",
             "TranscriptHandle",
             "WarnNearLimits",
+            "cleanup_session_artifacts",
+            "retain_run_artifacts",
         ),
         "yolop_duckdb": ("DuckDB", "DuckDBDeps"),
         "yolop_providers": ("CodexOAuth", "create_codex_model"),
