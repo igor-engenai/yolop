@@ -4,12 +4,13 @@ import json
 from collections.abc import AsyncIterator
 from pathlib import Path
 
+import pytest
 from pydantic_ai import AgentSpec
 from pydantic_ai.messages import ModelMessage, ModelRequest, ToolReturnPart
 from pydantic_ai.models.function import DeltaToolCall, DeltaToolCalls, FunctionModel
 from pydantic_ai.models.test import TestModel
 from yolop_deep import PlanItem, Planning, SessionPlanStore
-from yolop_runtime import Runtime, ScopedStateContext
+from yolop_runtime import Runtime, ScopedStateContext, StateSequenceConflictError
 from yolop_sqlite_session import SQLiteRuntimeStore
 
 from yolop import ProviderCatalog
@@ -73,6 +74,37 @@ def _tool_then_text(name: str, arguments: dict[str, object], seen: list[str]) ->
         yield {0: DeltaToolCall(name=name, json_args=json.dumps(arguments), tool_call_id=name)}
 
     return FunctionModel(stream_function=respond, model_name="test")
+
+
+async def test_plan_state_preserves_compare_and_append_conflicts(tmp_path: Path) -> None:
+    store = SQLiteRuntimeStore(tmp_path / "runtime.db")
+    runtime = Runtime(store=store)
+    spec = AgentSpec(model="test:model")
+    session = await runtime.create_session("tenant", spec=spec, model_id="test:model")
+    state = ScopedStateContext(
+        store=store,
+        namespace="tenant",
+        session_id=session.id,
+        run_id=session.id,
+    )
+    plan = SessionPlanStore(state)
+    await plan.set_items([PlanItem(content="first")])
+    state_stream = state.for_session("yolop.deep.planning")
+    current = await state_stream.read("plan")
+    await state_stream.append(
+        "plan",
+        {"items": [PlanItem(content="external").model_dump(mode="json")]},
+        expected_sequence=current[-1].sequence,
+    )
+
+    with pytest.raises(StateSequenceConflictError):
+        await state_stream.append(
+            "plan",
+            {"items": [PlanItem(content="stale writer").model_dump(mode="json")]},
+            expected_sequence=current[-1].sequence,
+        )
+
+    assert [item.content for item in await plan.get_items()] == ["external"]
 
 
 async def test_process_restart_preserves_the_session_plan(tmp_path: Path) -> None:
