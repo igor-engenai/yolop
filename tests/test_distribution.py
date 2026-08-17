@@ -58,6 +58,7 @@ def test_distribution_publishes_current_entry_points() -> None:
             "DuckDB": "yolop_duckdb:DuckDB",
             "StuckLoop": "yolop_context:StuckLoop",
             "Skills": "yolop.skills:Skills",
+            "ToolOutputLimits": "yolop_context:ToolOutputLimits",
             "WarnNearLimits": "yolop_context:WarnNearLimits",
             "Workspace": "yolop_workspace:Workspace",
         },

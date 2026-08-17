@@ -15,6 +15,7 @@ dependencies = [
 [project.entry-points."yolop.capabilities"]
 Context = "yolop_context:Context"
 StuckLoop = "yolop_context:StuckLoop"
+ToolOutputLimits = "yolop_context:ToolOutputLimits"
 WarnNearLimits = "yolop_context:WarnNearLimits"
 
 [tool.hatch.build.targets.wheel]
