@@ -17,6 +17,7 @@ from yolop_runtime import (
     RunBudgetExceededError,
     RunCompletion,
     RunRelation,
+    RunStatus,
     Runtime,
     RuntimeBudget,
     RuntimeDeadlineExceededError,
@@ -281,6 +282,12 @@ class GoalRunner:
         deps_type: type[Any],
         evaluator_spec: AgentSpec | None = None,
     ) -> GoalRecord:
+        if completion.run.status is RunStatus.INTERRUPTED:
+            record.status = GoalStatus.STOPPED
+            record.reason = "goal run cancelled"
+            record.needs_evaluation = False
+            await store.put(record)
+            return record
         evaluator_spec = evaluator_spec or AgentSpec.model_validate(record.evaluator_spec)
         record.needs_evaluation = False
         evaluator_completion: RunCompletion | None = None
@@ -303,6 +310,11 @@ class GoalRunner:
                 idempotency_key=f"goal:{record.goal_id}:evaluation:{record.turns}",
                 initiator="goal",
             )
+            if evaluator_completion.run.status is RunStatus.INTERRUPTED:
+                record.status = GoalStatus.STOPPED
+                record.reason = "goal evaluator cancelled"
+                await store.put(record)
+                return record
             verdict = GoalVerdict.model_validate(evaluator_completion.run.output)
             normalized = verdict.normalized()
         except Exception as error:
