@@ -16,6 +16,7 @@ dependencies = [
 [project.optional-dependencies]
 workspace = ["yolop-workspace>=0.1.0,<0.2.0"]
 context = ["yolop-context>=0.1.0,<0.2.0"]
+deep = ["yolop-deep>=0.1.0,<0.2.0"]
 duckdb = ["yolop-duckdb>=0.1.0,<0.2.0"]
 web = ["yolop-webserver>=0.1.0,<0.2.0"]
 tui = ["yolop-tui>=0.1.0,<0.2.0"]
@@ -24,6 +25,7 @@ providers = ["yolop-providers>=0.1.0,<0.2.0"]
 all = [
     "pydantic-ai-slim[openai]>=2.31.0",
     "yolop-context>=0.1.0,<0.2.0",
+    "yolop-deep>=0.1.0,<0.2.0",
     "yolop-duckdb>=0.1.0,<0.2.0",
     "yolop-providers>=0.1.0,<0.2.0",
     "yolop-runtime>=0.1.0,<0.2.0",
@@ -47,6 +49,7 @@ dev = [
     "ruff>=0.16.3",
     "ty>=0.0.72",
     "yolop-context",
+    "yolop-deep",
     "yolop-duckdb",
     "yolop-providers",
     "yolop-runtime",
@@ -63,6 +66,7 @@ package = true
 [tool.uv.sources]
 yolop = { workspace = true }
 yolop-context = { workspace = true }
+yolop-deep = { workspace = true }
 yolop-duckdb = { workspace = true }
 yolop-providers = { workspace = true }
 yolop-runtime = { workspace = true }
@@ -75,6 +79,7 @@ yolop-workspace-session = { workspace = true }
 [tool.uv.workspace]
 members = [
     "packages/yolop-context",
+    "packages/yolop-deep",
     "packages/yolop-duckdb",
     "packages/yolop-providers",
     "packages/yolop-runtime",
@@ -91,6 +96,7 @@ asyncio_mode = "auto"
 testpaths = [
     "tests",
     "packages/yolop-context/tests",
+    "packages/yolop-deep/tests",
     "packages/yolop-duckdb/tests",
     "packages/yolop-providers/tests",
     "packages/yolop-runtime/tests",
