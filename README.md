@@ -27,6 +27,7 @@ You can install smaller feature sets instead:
 - `uv add "yolop[tui,providers]"` installs the terminal host and optional YoloP providers.
 - `uv add "yolop[openai]"` installs OpenAI API support.
 - `uv add "yolop[providers]"` installs the `yolop-providers` package, including Codex subscription support.
+- `uv add "yolop[deep]"` installs durable planning and the explicit deep-coding capability preset.
 
 The feature packages remain separate Python distributions. A package index must contain compatible `0.1.x` releases of each selected YoloP distribution. For development in this repository, use `uv sync --all-packages`.
 
@@ -47,6 +48,8 @@ The coding AgentSpec selects:
 - the bundled `tdd` skill.
 
 The host supplies the workspace path through dependencies. AgentSpec cannot select an arbitrary host directory. Shell subprocesses do not receive common LLM API keys, including OpenAI and Azure OpenAI keys.
+
+For a durable deep-coding composition, install `yolop[deep]` and load the explicit preset with `yolop_deep.load_deep_coding_spec()`. The preset includes Workspace, context controls, subtasks and dependencies, and session-scoped planning. Its capability selections are validated against the installed ProviderCatalog; storage paths are always host-owned.
 
 The API key is not part of AgentSpec. Pydantic AI reads `OPENAI_API_KEY` from the environment. An Azure AgentSpec can use `azure:<deployment-name>` with `AZURE_OPENAI_API_KEY` and `AZURE_OPENAI_ENDPOINT`. Legacy Azure endpoints also need `OPENAI_API_VERSION`.
 
