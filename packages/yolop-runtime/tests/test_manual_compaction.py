@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -25,7 +26,7 @@ class FakeCompactor:
 
     async def compact(
         self,
-        messages: list[ModelMessage],
+        messages: Sequence[ModelMessage],
         *,
         focus: str | None,
         model: Any,
@@ -72,7 +73,7 @@ async def test_manual_compaction_changes_active_history_only(tmp_path: Path) -> 
         "test",
         session.id,
         spec=spec,
-        model=FunctionModel(),
+        model="test:model",
         model_id="test:model",
         deps=None,
         compactor=compactor,
@@ -99,7 +100,7 @@ async def test_manual_compaction_requires_selected_capability(tmp_path: Path) ->
             "test",
             session.id,
             spec=spec,
-            model=FunctionModel(),
+            model="test:model",
             model_id="test:model",
             deps=None,
             compactor=None,
