@@ -8,7 +8,8 @@ from uuid import uuid4
 from pydantic import TypeAdapter
 from pydantic_ai import AgentSpec, AgentStreamEvent
 from pydantic_ai.agent import EventStreamHandler
-from pydantic_ai.messages import UserContent
+from pydantic_ai.exceptions import RunCancelled
+from pydantic_ai.messages import ModelMessage, UserContent
 from pydantic_ai.models import KnownModelName, Model
 
 from yolop import ProviderCatalog, Yolop
@@ -98,8 +99,6 @@ class Runtime[HostDepsT]:
         follow_up_sink: RuntimeFollowUpSink | None = None,
         max_pending: int | None = None,
         initiator: str = "user",
-        parent_run_id: str | None = None,
-        root_run_id: str | None = None,
     ) -> RunCompletion:
         """Execute one durable run and return its terminal state and session."""
         self.kernel.provider_catalog.validate_spec(spec)
@@ -109,16 +108,28 @@ class Runtime[HostDepsT]:
             session,
             ExecutionPin.from_spec(spec, model_id=resolved_model_id),
         )
+        prompt_text = _prompt_text(prompt)
+        parent = (
+            await self.store.load_run(namespace, session.head_run_id)
+            if session.head_run_id is not None
+            else None
+        )
+        base_full_messages = list(parent.full_messages if parent is not None else session.messages)
         reservation = await self.store.reserve_run(
             namespace,
             session_id,
             idempotency_key=idempotency_key,
-            prompt=_prompt_text(prompt),
+            prompt=prompt_text,
             max_pending=max_pending,
+            parent_run_id=session.head_run_id,
+            root_run_id=parent.root_run_id if parent is not None else None,
+            initiator=initiator,
+            full_messages=base_full_messages,
+            active_messages=session.messages,
         )
         if not reservation.created:
             if reservation.run.status in _TERMINAL_STATUSES:
-                return await self.checkout(namespace, reservation.run.id)
+                return await self._terminal_completion(namespace, reservation.run.id)
             raise IdempotencyConflictError(
                 f"Run {reservation.run.id!r} is already active for this idempotency key"
             )
@@ -134,8 +145,8 @@ class Runtime[HostDepsT]:
             namespace=namespace,
             session_id=session_id,
             run_id=claimed.id,
-            parent_run_id=parent_run_id,
-            root_run_id=root_run_id,
+            parent_run_id=claimed.parent_run_id,
+            root_run_id=claimed.root_run_id,
             initiator=initiator,
         )
         runtime_deps = RuntimeDeps(
@@ -145,6 +156,7 @@ class Runtime[HostDepsT]:
             follow_up_sink=follow_up_sink,
             host=deps,
         )
+        current_session = session
         try:
             async with self.store.lock_session(
                 namespace,
@@ -152,6 +164,7 @@ class Runtime[HostDepsT]:
                 timeout=self.session_lock_timeout,
             ):
                 current = await self.store.load_session(namespace, session_id)
+                current_session = current
                 ensure_session_pin(
                     current,
                     ExecutionPin.from_spec(spec, model_id=resolved_model_id),
@@ -171,18 +184,46 @@ class Runtime[HostDepsT]:
                     model=model,
                     message_history=current.messages,
                 )
+                new_messages = result.new_messages()
+                active_messages = result.all_messages()
                 completion = await self.store.complete_run(
                     namespace,
                     claimed.id,
                     owner_id=owner_id,
                     expected_session_revision=current.revision,
-                    messages=result.all_messages(),
+                    full_messages=[*base_full_messages, *new_messages],
+                    active_messages=active_messages,
                     output=result.output,
                     usage=result.usage,
                 )
-                return completion
-        except asyncio.CancelledError:
-            await self.store.cancel_run(namespace, claimed.id)
+                terminal = await self.store.load_run(namespace, claimed.id)
+                return RunCompletion(session=completion.session, run=terminal)
+        except RunCancelled as cancelled:
+            return await self._store_cancelled_run(
+                namespace,
+                claimed.id,
+                expected_session_revision=current_session.revision,
+                base_full_messages=base_full_messages,
+                cancelled=cancelled,
+            )
+        except asyncio.CancelledError as cancelled:
+            partial = RunCancelled.from_cancellation(cancelled)
+            if partial is not None:
+                await self._store_cancelled_run(
+                    namespace,
+                    claimed.id,
+                    expected_session_revision=current_session.revision,
+                    base_full_messages=base_full_messages,
+                    cancelled=partial,
+                )
+            else:
+                await self.store.cancel_run(
+                    namespace,
+                    claimed.id,
+                    expected_session_revision=current_session.revision,
+                    full_messages=base_full_messages,
+                    active_messages=current_session.messages,
+                )
             raise
         except Exception:
             await self.store.fail_run(
@@ -193,6 +234,28 @@ class Runtime[HostDepsT]:
                 error_detail="Agent run failed",
             )
             raise
+
+    async def _store_cancelled_run(
+        self,
+        namespace: str,
+        run_id: str,
+        *,
+        expected_session_revision: str,
+        base_full_messages: Sequence[ModelMessage],
+        cancelled: RunCancelled,
+    ) -> RunCompletion:
+        full_messages = [*base_full_messages, *cancelled.new_messages()]
+        active_messages = cancelled.all_messages()
+        run = await self.store.cancel_run(
+            namespace,
+            run_id,
+            expected_session_revision=expected_session_revision,
+            full_messages=full_messages,
+            active_messages=active_messages,
+            usage=cancelled.usage,
+        )
+        session = await self.store.load_session(namespace, run.session_id)
+        return RunCompletion(session=session, run=run)
 
     async def get_run(self, namespace: str, run_id: str) -> RuntimeRunSnapshot:
         return await self.store.load_run(namespace, run_id)
@@ -217,8 +280,23 @@ class Runtime[HostDepsT]:
     async def cancel_run(self, namespace: str, run_id: str) -> RuntimeRunSnapshot:
         return await self.store.cancel_run(namespace, run_id)
 
-    async def checkout(self, namespace: str, run_id: str) -> RunCompletion:
-        """Return a terminal Run and its exact current session history."""
+    async def checkout(
+        self,
+        namespace: str,
+        session_id: str,
+        run_id: str,
+        *,
+        expected_revision: str,
+    ) -> RuntimeSessionSnapshot:
+        """Select a terminal Run as the Session head without deleting branches."""
+        return await self.store.checkout_session(
+            namespace,
+            session_id,
+            run_id,
+            expected_revision=expected_revision,
+        )
+
+    async def _terminal_completion(self, namespace: str, run_id: str) -> RunCompletion:
         run = await self.store.load_run(namespace, run_id)
         if run.status not in _TERMINAL_STATUSES:
             raise RunStateError(f"Run {run_id!r} is not terminal")

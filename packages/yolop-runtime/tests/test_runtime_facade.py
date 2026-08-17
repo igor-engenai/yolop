@@ -75,8 +75,14 @@ class MemoryStore:
         idempotency_key: str,
         prompt: str,
         max_pending: int | None = None,
+        parent_run_id: str | None = None,
+        root_run_id: str | None = None,
+        initiator: str = "user",
+        input_digest: str | None = None,
+        full_messages: Sequence[ModelMessage] = (),
+        active_messages: Sequence[ModelMessage] = (),
     ) -> RunReservation:
-        del max_pending
+        del max_pending, input_digest
         now = datetime.now(UTC)
         self.run = RuntimeRunSnapshot(
             id="00000000-0000-4000-8000-000000000002",
@@ -87,6 +93,11 @@ class MemoryStore:
             status=RunStatus.ACCEPTED,
             created_at=now,
             updated_at=now,
+            parent_run_id=parent_run_id,
+            root_run_id=root_run_id or parent_run_id or "00000000-0000-4000-8000-000000000002",
+            initiator=initiator,
+            full_messages=list(full_messages),
+            active_messages=list(active_messages),
         )
         return RunReservation(self.run, created=True)
 
@@ -111,14 +122,30 @@ class MemoryStore:
         *,
         error_code: str = "run_cancelled",
         error_detail: str = "Run cancelled",
+        expected_session_revision: str | None = None,
+        full_messages: Sequence[ModelMessage] | None = None,
+        active_messages: Sequence[ModelMessage] | None = None,
+        output: Any | None = None,
+        usage: RunUsage | None = None,
     ) -> RuntimeRunSnapshot:
-        del namespace, run_id
+        del namespace, run_id, expected_session_revision
         assert self.run is not None
         self.run = replace(
             self.run,
             status=RunStatus.INTERRUPTED,
             error_code=error_code,
             error_detail=error_detail,
+            full_messages=list(full_messages or self.run.full_messages),
+            active_messages=list(active_messages or self.run.active_messages),
+            output=output,
+            usage=usage,
+        )
+        assert self.session is not None
+        self.session = replace(
+            self.session,
+            messages=list(self.run.active_messages),
+            revision="cancelled",
+            head_run_id=self.run.id,
         )
         return self.run
 
@@ -165,6 +192,25 @@ class MemoryStore:
         assert self.run is not None
         return self.run
 
+    async def checkout_session(
+        self,
+        namespace: str,
+        session_id: str,
+        run_id: str,
+        *,
+        expected_revision: str,
+    ) -> RuntimeSessionSnapshot:
+        del namespace, session_id, expected_revision
+        assert self.session is not None and self.run is not None
+        assert self.run.id == run_id
+        self.session = replace(
+            self.session,
+            messages=list(self.run.active_messages),
+            revision="checkout",
+            head_run_id=run_id,
+        )
+        return self.session
+
     async def append_run_event(
         self,
         namespace: str,
@@ -184,14 +230,29 @@ class MemoryStore:
         *,
         owner_id: str,
         expected_session_revision: str,
-        messages: Sequence[ModelMessage],
+        messages: Sequence[ModelMessage] | None = None,
+        full_messages: Sequence[ModelMessage] | None = None,
+        active_messages: Sequence[ModelMessage] | None = None,
         output: Any,
         usage: RunUsage,
     ) -> RunCompletion:
         del namespace, run_id, owner_id, expected_session_revision, usage
         assert self.session is not None and self.run is not None
-        self.session = replace(self.session, messages=list(messages), revision="complete")
-        self.run = replace(self.run, status=RunStatus.COMPLETED, output=output)
+        full_messages = list(full_messages if full_messages is not None else messages or ())
+        active_messages = list(active_messages if active_messages is not None else messages or ())
+        self.session = replace(
+            self.session,
+            messages=active_messages,
+            revision="complete",
+            head_run_id=self.run.id,
+        )
+        self.run = replace(
+            self.run,
+            status=RunStatus.COMPLETED,
+            output=output,
+            full_messages=full_messages,
+            active_messages=active_messages,
+        )
         return RunCompletion(self.session, self.run)
 
     async def fail_run(self, *args, **kwargs):
@@ -274,8 +335,13 @@ async def test_runtime_cancellation_has_one_terminal_result() -> None:
 
     assert first.status is RunStatus.INTERRUPTED
     assert second == first
-    checked_out = await runtime.checkout("test", run_id)
-    assert checked_out.run == first
+    checked_out = await runtime.checkout(
+        "test",
+        session.id,
+        run_id,
+        expected_revision="cancelled",
+    )
+    assert checked_out.head_run_id == first.id
 
 
 async def test_runtime_creates_a_session_and_completes_one_run() -> None:

@@ -33,6 +33,7 @@ from yolop_runtime import (
     SessionLockTimeoutError,
     SessionNotFoundError,
     StoredRunEvent,
+    input_digest,
     new_session_id,
     validate_namespace,
     validate_session_id,
@@ -40,7 +41,7 @@ from yolop_runtime import (
 
 _EMPTY_MESSAGES = b"[]"
 _USAGE_ADAPTER = TypeAdapter(RunUsage)
-_RUNTIME_SCHEMA_VERSION = 1
+_RUNTIME_SCHEMA_VERSION = 2
 _RUNTIME_METADATA_SCHEMA = """
 CREATE TABLE runtime_metadata (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
@@ -55,12 +56,19 @@ CREATE TABLE runtime_sessions (
     model_id TEXT NOT NULL,
     revision TEXT NOT NULL,
     messages BLOB NOT NULL,
+    head_run_id TEXT,
     PRIMARY KEY (namespace, id)
 );
 CREATE TABLE runtime_runs (
     namespace TEXT NOT NULL,
     id TEXT NOT NULL,
     session_id TEXT NOT NULL,
+    parent_run_id TEXT,
+    root_run_id TEXT,
+    initiator TEXT NOT NULL,
+    input_digest TEXT NOT NULL,
+    full_messages BLOB NOT NULL,
+    active_messages BLOB NOT NULL,
     idempotency_key TEXT NOT NULL,
     prompt TEXT NOT NULL,
     status TEXT NOT NULL,
@@ -90,7 +98,8 @@ CREATE TABLE runtime_run_events (
 )
 """
 _RUN_COLUMNS = """
-id, namespace, session_id, idempotency_key, prompt, status,
+id, namespace, session_id, parent_run_id, root_run_id, initiator,
+input_digest, full_messages, active_messages, idempotency_key, prompt, status,
 created_at, updated_at, owner_id, lease_expires_at, output, usage,
 session_revision, error_code, error_detail
 """
@@ -165,6 +174,12 @@ class SQLiteRuntimeStore:
         idempotency_key: str,
         prompt: str,
         max_pending: int | None = None,
+        parent_run_id: str | None = None,
+        root_run_id: str | None = None,
+        initiator: str = "user",
+        input_digest: str | None = None,
+        full_messages: Sequence[ModelMessage] = (),
+        active_messages: Sequence[ModelMessage] = (),
     ) -> RunReservation:
         return await _to_thread(
             self._reserve_run,
@@ -173,6 +188,12 @@ class SQLiteRuntimeStore:
             idempotency_key,
             prompt,
             max_pending,
+            parent_run_id,
+            root_run_id,
+            initiator,
+            input_digest,
+            full_messages,
+            active_messages,
         )
 
     async def load_run(self, namespace: str, run_id: str) -> RuntimeRunSnapshot:
@@ -193,6 +214,11 @@ class SQLiteRuntimeStore:
         *,
         error_code: str = "run_cancelled",
         error_detail: str = "Run cancelled",
+        expected_session_revision: str | None = None,
+        full_messages: Sequence[ModelMessage] | None = None,
+        active_messages: Sequence[ModelMessage] | None = None,
+        output: Any | None = None,
+        usage: RunUsage | None = None,
     ) -> RuntimeRunSnapshot:
         return await _to_thread(
             self._cancel_run,
@@ -200,6 +226,11 @@ class SQLiteRuntimeStore:
             run_id,
             error_code,
             error_detail,
+            expected_session_revision,
+            full_messages,
+            active_messages,
+            output,
+            usage,
         )
 
     async def claim_run(
@@ -268,7 +299,9 @@ class SQLiteRuntimeStore:
         *,
         owner_id: str,
         expected_session_revision: str,
-        messages: Sequence[ModelMessage],
+        messages: Sequence[ModelMessage] | None = None,
+        full_messages: Sequence[ModelMessage] | None = None,
+        active_messages: Sequence[ModelMessage] | None = None,
         output: Any,
         usage: RunUsage,
     ) -> RunCompletion:
@@ -279,6 +312,8 @@ class SQLiteRuntimeStore:
             owner_id,
             expected_session_revision,
             messages,
+            full_messages,
+            active_messages,
             output,
             usage,
         )
@@ -318,6 +353,22 @@ class SQLiteRuntimeStore:
             self._delete_runtime_session,
             namespace,
             session_id,
+            expected_revision,
+        )
+
+    async def checkout_session(
+        self,
+        namespace: str,
+        session_id: str,
+        run_id: str,
+        *,
+        expected_revision: str,
+    ) -> RuntimeSessionSnapshot:
+        return await _to_thread(
+            self._checkout_session,
+            namespace,
+            session_id,
+            run_id,
             expected_revision,
         )
 
@@ -373,8 +424,8 @@ class SQLiteRuntimeStore:
                     connection.execute(
                         """
                         INSERT INTO runtime_sessions (
-                            namespace, id, agent_spec_id, model_id, revision, messages
-                        ) VALUES (?, ?, ?, ?, ?, ?)
+                            namespace, id, agent_spec_id, model_id, revision, messages, head_run_id
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             validated_namespace,
@@ -383,6 +434,7 @@ class SQLiteRuntimeStore:
                             pin.model_id,
                             revision,
                             _EMPTY_MESSAGES,
+                            None,
                         ),
                     )
             except sqlite3.IntegrityError as error:
@@ -398,6 +450,7 @@ class SQLiteRuntimeStore:
                 pin=pin,
                 messages=[],
                 revision=revision,
+                head_run_id=None,
             )
 
     def _reserve_run(
@@ -407,11 +460,26 @@ class SQLiteRuntimeStore:
         idempotency_key: str,
         prompt: str,
         max_pending: int | None,
+        parent_run_id: str | None,
+        root_run_id: str | None,
+        initiator: str,
+        run_input_digest: str | None,
+        full_messages: Sequence[ModelMessage],
+        active_messages: Sequence[ModelMessage],
     ) -> RunReservation:
         validated_namespace = validate_namespace(namespace)
         validated_id = validate_session_id(session_id)
         if not idempotency_key or len(idempotency_key) > 255:
             raise ValueError("Idempotency key must contain between 1 and 255 characters")
+        if not initiator.strip():
+            raise ValueError("Run initiator must not be empty")
+        if parent_run_id is not None:
+            validate_session_id(parent_run_id)
+        if root_run_id is not None:
+            validate_session_id(root_run_id)
+        run_input_digest = run_input_digest or input_digest(prompt)
+        full_content = ModelMessagesTypeAdapter.dump_json(list(full_messages))
+        active_content = ModelMessagesTypeAdapter.dump_json(list(active_messages))
         now = datetime.now(UTC)
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -429,7 +497,7 @@ class SQLiteRuntimeStore:
                 (validated_namespace, validated_id, idempotency_key),
             ).fetchone()
             if row is not None:
-                run = _runtime_run(row)
+                run = _runtime_run(row, connection=connection)
                 if run.prompt != prompt:
                     raise IdempotencyConflictError(
                         f"Idempotency key {idempotency_key!r} has different input"
@@ -458,17 +526,25 @@ class SQLiteRuntimeStore:
                     )
 
             run_id = new_session_id()
+            effective_root_run_id = root_run_id or parent_run_id or run_id
             connection.execute(
                 """
                 INSERT INTO runtime_runs (
-                    namespace, id, session_id, idempotency_key, prompt, status,
+                    namespace, id, session_id, parent_run_id, root_run_id, initiator,
+                    input_digest, full_messages, active_messages, idempotency_key, prompt, status,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     validated_namespace,
                     run_id,
                     validated_id,
+                    parent_run_id,
+                    effective_root_run_id,
+                    initiator,
+                    run_input_digest,
+                    full_content,
+                    active_content,
                     idempotency_key,
                     prompt,
                     RunStatus.ACCEPTED,
@@ -486,6 +562,12 @@ class SQLiteRuntimeStore:
                 status=RunStatus.ACCEPTED,
                 created_at=now,
                 updated_at=now,
+                parent_run_id=parent_run_id,
+                root_run_id=effective_root_run_id,
+                initiator=initiator,
+                input_digest=run_input_digest,
+                full_messages=list(full_messages),
+                active_messages=list(active_messages),
             ),
             created=True,
         )
@@ -511,7 +593,7 @@ class SQLiteRuntimeStore:
         query += " ORDER BY created_at, id"
         with self._connect() as connection:
             rows = connection.execute(query, parameters).fetchall()
-        return [_runtime_run(row) for row in rows]
+            return [_runtime_run(row, connection=connection) for row in rows]
 
     def _cancel_run(
         self,
@@ -519,6 +601,11 @@ class SQLiteRuntimeStore:
         run_id: str,
         error_code: str,
         error_detail: str,
+        expected_session_revision: str | None,
+        full_messages: Sequence[ModelMessage] | None,
+        active_messages: Sequence[ModelMessage] | None,
+        output: Any | None,
+        usage: RunUsage | None,
     ) -> RuntimeRunSnapshot:
         validated_namespace = validate_namespace(namespace)
         validated_id = validate_session_id(run_id)
@@ -534,11 +621,48 @@ class SQLiteRuntimeStore:
                 RunStatus.INTERRUPTED,
             }:
                 return run
+            session_row = connection.execute(
+                """
+                SELECT revision
+                FROM runtime_sessions
+                WHERE namespace = ? AND id = ?
+                """,
+                (validated_namespace, run.session_id),
+            ).fetchone()
+            if session_row is None:
+                raise SessionNotFoundError(f"Session {run.session_id!r} does not exist")
+            (current_revision,) = session_row
+            if (
+                expected_session_revision is not None
+                and current_revision != expected_session_revision
+            ):
+                raise SessionConflictError(f"Session {run.session_id!r} has changed")
+            full_messages = list(full_messages if full_messages is not None else run.full_messages)
+            active_messages = list(
+                active_messages if active_messages is not None else run.active_messages
+            )
+            full_content = ModelMessagesTypeAdapter.dump_json(full_messages)
+            active_content = ModelMessagesTypeAdapter.dump_json(active_messages)
+            session_revision = _revision(active_content)
+            connection.execute(
+                """
+                UPDATE runtime_sessions SET revision = ?, messages = ?, head_run_id = ?
+                WHERE namespace = ? AND id = ?
+                """,
+                (
+                    session_revision,
+                    active_content,
+                    validated_id,
+                    validated_namespace,
+                    run.session_id,
+                ),
+            )
             connection.execute(
                 """
                 UPDATE runtime_runs
                 SET status = ?, updated_at = ?, owner_id = NULL, lease_expires_at = NULL,
-                    error_code = ?, error_detail = ?
+                    error_code = ?, error_detail = ?, session_revision = ?,
+                    full_messages = ?, active_messages = ?, output = ?, usage = ?
                 WHERE namespace = ? AND id = ?
                 """,
                 (
@@ -546,6 +670,11 @@ class SQLiteRuntimeStore:
                     now.isoformat(),
                     error_code,
                     error_detail,
+                    session_revision,
+                    full_content,
+                    active_content,
+                    to_json(output) if output is not None else None,
+                    _USAGE_ADAPTER.dump_json(usage) if usage is not None else None,
                     validated_namespace,
                     validated_id,
                 ),
@@ -558,6 +687,11 @@ class SQLiteRuntimeStore:
             lease_expires_at=None,
             error_code=error_code,
             error_detail=error_detail,
+            session_revision=session_revision,
+            full_messages=full_messages,
+            active_messages=active_messages,
+            output=output,
+            usage=usage,
         )
 
     def _claim_run(
@@ -712,17 +846,23 @@ class SQLiteRuntimeStore:
         run_id: str,
         owner_id: str,
         expected_session_revision: str,
-        messages: Sequence[ModelMessage],
+        messages: Sequence[ModelMessage] | None,
+        full_messages: Sequence[ModelMessage] | None,
+        active_messages: Sequence[ModelMessage] | None,
         output: Any,
         usage: RunUsage,
     ) -> RunCompletion:
         validated_namespace = validate_namespace(namespace)
         validated_id = validate_session_id(run_id)
-        message_content = ModelMessagesTypeAdapter.dump_json(list(messages))
-        session_revision = _revision(message_content)
+        full_messages = list(full_messages if full_messages is not None else messages or ())
+        active_messages = list(active_messages if active_messages is not None else messages or ())
+        full_content = ModelMessagesTypeAdapter.dump_json(full_messages)
+        active_content = ModelMessagesTypeAdapter.dump_json(active_messages)
+        session_revision = _revision(active_content)
         output_content = to_json(output)
         usage_content = _USAGE_ADAPTER.dump_json(usage)
         now = datetime.now(UTC)
+        run_events: list[StoredRunEvent] = []
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             run = _select_owned_running_run(
@@ -733,7 +873,7 @@ class SQLiteRuntimeStore:
             )
             session_row = connection.execute(
                 """
-                SELECT agent_spec_id, model_id, revision
+                SELECT agent_spec_id, model_id, revision, head_run_id
                 FROM runtime_sessions
                 WHERE namespace = ? AND id = ?
                 """,
@@ -741,17 +881,18 @@ class SQLiteRuntimeStore:
             ).fetchone()
             if session_row is None:
                 raise SessionNotFoundError(f"Session {run.session_id!r} does not exist")
-            agent_spec_id, model_id, current_revision = session_row
+            agent_spec_id, model_id, current_revision, _current_head_run_id = session_row
             if current_revision != expected_session_revision:
                 raise SessionConflictError(f"Session {run.session_id!r} has changed")
             connection.execute(
                 """
-                UPDATE runtime_sessions SET revision = ?, messages = ?
+                UPDATE runtime_sessions SET revision = ?, messages = ?, head_run_id = ?
                 WHERE namespace = ? AND id = ?
                 """,
                 (
                     session_revision,
-                    message_content,
+                    active_content,
+                    validated_id,
                     validated_namespace,
                     run.session_id,
                 ),
@@ -760,7 +901,8 @@ class SQLiteRuntimeStore:
                 """
                 UPDATE runtime_runs
                 SET status = ?, updated_at = ?, owner_id = NULL, lease_expires_at = NULL,
-                    output = ?, usage = ?, session_revision = ?
+                    output = ?, usage = ?, session_revision = ?,
+                    full_messages = ?, active_messages = ?
                 WHERE namespace = ? AND id = ?
                 """,
                 (
@@ -769,16 +911,20 @@ class SQLiteRuntimeStore:
                     output_content,
                     usage_content,
                     session_revision,
+                    full_content,
+                    active_content,
                     validated_namespace,
                     validated_id,
                 ),
             )
+            run_events = _run_events(connection, validated_namespace, validated_id)
         session = RuntimeSessionSnapshot(
             id=run.session_id,
             namespace=validated_namespace,
             pin=ExecutionPin(agent_spec_id=agent_spec_id, model_id=model_id),
-            messages=list(messages),
+            messages=list(active_messages),
             revision=session_revision,
+            head_run_id=validated_id,
         )
         completed_run = replace(
             run,
@@ -789,6 +935,9 @@ class SQLiteRuntimeStore:
             output=output,
             usage=usage,
             session_revision=session_revision,
+            full_messages=list(full_messages),
+            active_messages=list(active_messages),
+            events=run_events,
         )
         return RunCompletion(session=session, run=completed_run)
 
@@ -902,7 +1051,7 @@ class SQLiteRuntimeStore:
         with self._connect() as connection:
             row = connection.execute(
                 """
-                SELECT agent_spec_id, model_id, revision, messages
+                SELECT agent_spec_id, model_id, revision, messages, head_run_id
                 FROM runtime_sessions
                 WHERE namespace = ? AND id = ?
                 """,
@@ -910,7 +1059,7 @@ class SQLiteRuntimeStore:
             ).fetchone()
         if row is None:
             raise SessionNotFoundError(f"Session {session_id!r} does not exist")
-        agent_spec_id, model_id, revision, content = row
+        agent_spec_id, model_id, revision, content, head_run_id = row
         try:
             messages = ModelMessagesTypeAdapter.validate_json(content)
         except (ValueError, ValidationError) as error:
@@ -921,6 +1070,7 @@ class SQLiteRuntimeStore:
             pin=ExecutionPin(agent_spec_id=agent_spec_id, model_id=model_id),
             messages=messages,
             revision=revision,
+            head_run_id=head_run_id,
         )
 
     def _delete_runtime_session(
@@ -949,6 +1099,64 @@ class SQLiteRuntimeStore:
                 (validated_namespace, validated_id),
             )
 
+    def _checkout_session(
+        self,
+        namespace: str,
+        session_id: str,
+        run_id: str,
+        expected_revision: str,
+    ) -> RuntimeSessionSnapshot:
+        validated_namespace = validate_namespace(namespace)
+        validated_session_id = validate_session_id(session_id)
+        validated_run_id = validate_session_id(run_id)
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            run = _select_runtime_run(connection, validated_namespace, validated_run_id)
+            if run.session_id != validated_session_id:
+                raise RunStateError(f"Run {run_id!r} belongs to another session")
+            if run.status not in {
+                RunStatus.COMPLETED,
+                RunStatus.FAILED,
+                RunStatus.INTERRUPTED,
+            }:
+                raise RunStateError(f"Run {run_id!r} is not terminal")
+            row = connection.execute(
+                """
+                SELECT agent_spec_id, model_id, revision
+                FROM runtime_sessions
+                WHERE namespace = ? AND id = ?
+                """,
+                (validated_namespace, validated_session_id),
+            ).fetchone()
+            if row is None:
+                raise SessionNotFoundError(f"Session {session_id!r} does not exist")
+            agent_spec_id, model_id, current_revision = row
+            if current_revision != expected_revision:
+                raise SessionConflictError(f"Session {session_id!r} has changed")
+            active_content = ModelMessagesTypeAdapter.dump_json(run.active_messages)
+            revision = _revision(active_content)
+            connection.execute(
+                """
+                UPDATE runtime_sessions SET revision = ?, messages = ?, head_run_id = ?
+                WHERE namespace = ? AND id = ?
+                """,
+                (
+                    revision,
+                    active_content,
+                    validated_run_id,
+                    validated_namespace,
+                    validated_session_id,
+                ),
+            )
+        return RuntimeSessionSnapshot(
+            id=validated_session_id,
+            namespace=validated_namespace,
+            pin=ExecutionPin(agent_spec_id=agent_spec_id, model_id=model_id),
+            messages=list(run.active_messages),
+            revision=revision,
+            head_run_id=validated_run_id,
+        )
+
     def _replace_runtime_session(
         self,
         namespace: str,
@@ -964,7 +1172,7 @@ class SQLiteRuntimeStore:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
                 """
-                SELECT agent_spec_id, model_id, revision
+                SELECT agent_spec_id, model_id, revision, head_run_id
                 FROM runtime_sessions
                 WHERE namespace = ? AND id = ?
                 """,
@@ -972,7 +1180,7 @@ class SQLiteRuntimeStore:
             ).fetchone()
             if row is None:
                 raise SessionNotFoundError(f"Session {session_id!r} does not exist")
-            agent_spec_id, model_id, current_revision = row
+            agent_spec_id, model_id, current_revision, head_run_id = row
             if current_revision != expected_revision:
                 raise SessionConflictError(f"Session {session_id!r} has changed")
             connection.execute(
@@ -989,6 +1197,7 @@ class SQLiteRuntimeStore:
             pin=ExecutionPin(agent_spec_id=agent_spec_id, model_id=model_id),
             messages=list(messages),
             revision=revision,
+            head_run_id=head_run_id,
         )
 
     @contextmanager
@@ -1027,7 +1236,7 @@ def _select_runtime_run(
     ).fetchone()
     if row is None:
         raise RunNotFoundError(f"Run {run_id!r} does not exist")
-    return _runtime_run(row)
+    return _runtime_run(row, connection=connection)
 
 
 def _select_owned_running_run(
@@ -1049,11 +1258,21 @@ def _validate_lease(owner_id: str, lease_seconds: float) -> None:
         raise ValueError("Run lease must be positive")
 
 
-def _runtime_run(row: sqlite3.Row | tuple[Any, ...]) -> RuntimeRunSnapshot:
+def _runtime_run(
+    row: sqlite3.Row | tuple[Any, ...],
+    *,
+    connection: sqlite3.Connection | None = None,
+) -> RuntimeRunSnapshot:
     (
         run_id,
         namespace,
         session_id,
+        parent_run_id,
+        root_run_id,
+        initiator,
+        input_digest,
+        full_content,
+        active_content,
         idempotency_key,
         prompt,
         status,
@@ -1067,6 +1286,7 @@ def _runtime_run(row: sqlite3.Row | tuple[Any, ...]) -> RuntimeRunSnapshot:
         error_code,
         error_detail,
     ) = row
+    events = _run_events(connection, namespace, run_id) if connection is not None else []
     return RuntimeRunSnapshot(
         id=run_id,
         namespace=namespace,
@@ -1085,7 +1305,30 @@ def _runtime_run(row: sqlite3.Row | tuple[Any, ...]) -> RuntimeRunSnapshot:
         session_revision=session_revision,
         error_code=error_code,
         error_detail=error_detail,
+        parent_run_id=parent_run_id,
+        root_run_id=root_run_id,
+        initiator=initiator,
+        input_digest=input_digest,
+        full_messages=ModelMessagesTypeAdapter.validate_json(full_content),
+        active_messages=ModelMessagesTypeAdapter.validate_json(active_content),
+        events=events,
     )
+
+
+def _run_events(
+    connection: sqlite3.Connection,
+    namespace: str,
+    run_id: str,
+) -> list[StoredRunEvent]:
+    rows = connection.execute(
+        """
+        SELECT sequence, event, data FROM runtime_run_events
+        WHERE namespace = ? AND run_id = ?
+        ORDER BY sequence
+        """,
+        (namespace, run_id),
+    ).fetchall()
+    return [StoredRunEvent(sequence=row[0], event=row[1], data=row[2]) for row in rows]
 
 
 def _revision(content: bytes) -> str:

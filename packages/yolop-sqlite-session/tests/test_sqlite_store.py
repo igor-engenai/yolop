@@ -172,6 +172,17 @@ async def test_runtime_session_lock_coordinates_store_instances(tmp_path) -> Non
         pass
 
 
+def test_runtime_store_rejects_the_previous_runtime_schema(tmp_path) -> None:
+    database = tmp_path / "previous.db"
+    store = SQLiteRuntimeStore(database)
+    del store
+    with sqlite3.connect(database) as connection:
+        connection.execute("UPDATE runtime_metadata SET schema_version = 1")
+
+    with raises(RuntimeStoreSchemaError):
+        SQLiteRuntimeStore(database)
+
+
 def test_runtime_store_rejects_the_old_schema(tmp_path) -> None:
     database = tmp_path / "old.db"
     with sqlite3.connect(database) as connection:

@@ -123,6 +123,7 @@ async def test_runs_can_be_listed_and_cancelled(tmp_path) -> None:
 
     assert [run.id for run in listed] == [first.run.id, second.run.id]
     assert cancelled.status is RunStatus.INTERRUPTED
+    assert (await store.load_session("tenant/acme", session.id)).head_run_id == first.run.id
     assert (await store.cancel_run("tenant/acme", first.run.id)) == cancelled
 
 

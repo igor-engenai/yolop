@@ -1,7 +1,7 @@
 import json
 from collections.abc import Sequence
 from contextlib import AbstractAsyncContextManager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from hashlib import sha256
@@ -170,13 +170,14 @@ class ExecutionPin:
 
 @dataclass(frozen=True)
 class RuntimeSessionSnapshot:
-    """A namespaced session at one content revision."""
+    """A namespaced session at one content revision and selected Run head."""
 
     id: str
     namespace: str
     pin: ExecutionPin
     messages: list[ModelMessage]
     revision: str
+    head_run_id: str | None = None
 
 
 class RunStatus(StrEnum):
@@ -200,7 +201,7 @@ class StoredRunEvent:
 
 @dataclass(frozen=True)
 class RuntimeRunSnapshot:
-    """Durable run state inside one namespace and session."""
+    """An immutable durable Run history node."""
 
     id: str
     namespace: str
@@ -217,6 +218,13 @@ class RuntimeRunSnapshot:
     session_revision: str | None = None
     error_code: str | None = None
     error_detail: str | None = None
+    parent_run_id: str | None = None
+    root_run_id: str | None = None
+    initiator: str = "user"
+    input_digest: str = ""
+    full_messages: list[ModelMessage] = field(default_factory=list)
+    active_messages: list[ModelMessage] = field(default_factory=list)
+    events: list[StoredRunEvent] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -257,6 +265,15 @@ class RuntimeStore(Protocol):
         expected_revision: str,
     ) -> None: ...
 
+    async def checkout_session(
+        self,
+        namespace: str,
+        session_id: str,
+        run_id: str,
+        *,
+        expected_revision: str,
+    ) -> RuntimeSessionSnapshot: ...
+
     async def replace_session(
         self,
         namespace: str,
@@ -282,6 +299,12 @@ class RuntimeStore(Protocol):
         idempotency_key: str,
         prompt: str,
         max_pending: int | None = None,
+        parent_run_id: str | None = None,
+        root_run_id: str | None = None,
+        initiator: str = "user",
+        input_digest: str | None = None,
+        full_messages: Sequence[ModelMessage] = (),
+        active_messages: Sequence[ModelMessage] = (),
     ) -> RunReservation: ...
 
     async def load_run(self, namespace: str, run_id: str) -> RuntimeRunSnapshot: ...
@@ -300,6 +323,11 @@ class RuntimeStore(Protocol):
         *,
         error_code: str = "run_cancelled",
         error_detail: str = "Run cancelled",
+        expected_session_revision: str | None = None,
+        full_messages: Sequence[ModelMessage] | None = None,
+        active_messages: Sequence[ModelMessage] | None = None,
+        output: Any | None = None,
+        usage: RunUsage | None = None,
     ) -> RuntimeRunSnapshot: ...
 
     async def claim_run(
@@ -345,7 +373,9 @@ class RuntimeStore(Protocol):
         *,
         owner_id: str,
         expected_session_revision: str,
-        messages: Sequence[ModelMessage],
+        messages: Sequence[ModelMessage] | None = None,
+        full_messages: Sequence[ModelMessage] | None = None,
+        active_messages: Sequence[ModelMessage] | None = None,
         output: Any,
         usage: RunUsage,
     ) -> RunCompletion: ...
@@ -388,6 +418,11 @@ def agent_spec_digest(spec: AgentSpec | dict[str, Any]) -> str:
 def new_session_id() -> str:
     """Return a canonical generated UUID4 session ID."""
     return str(uuid4())
+
+
+def input_digest(prompt: str) -> str:
+    """Return a stable digest for persisted Run input."""
+    return sha256(prompt.encode()).hexdigest()
 
 
 def validate_namespace(namespace: str) -> str:
@@ -439,6 +474,7 @@ __all__ = [
     "StoredRunEvent",
     "agent_spec_digest",
     "ensure_session_pin",
+    "input_digest",
     "new_session_id",
     "validate_namespace",
     "validate_session_id",
