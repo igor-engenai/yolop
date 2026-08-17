@@ -22,6 +22,7 @@ You can install smaller feature sets instead:
 
 - `uv add "yolop[workspace]"` installs the Workspace capability.
 - `uv add "yolop[duckdb]"` installs the DuckDB capability.
+- `uv add "yolop[mcp]"` installs host-authorized MCP transport support.
 - `uv add "yolop[web]"` installs the web host and its runtime persistence.
 - `uv add "yolop[tui,openai]"` installs the terminal host and OpenAI API support.
 - `uv add "yolop[tui,providers]"` installs the terminal host and optional YoloP providers.
@@ -263,6 +264,10 @@ The core package contains the stateless runtime, AgentSpec capability discovery,
 ### `yolop-sqlite-session`
 
 [`packages/yolop-sqlite-session`](packages/yolop-sqlite-session) implements `RuntimeStore` with SQLite. It provides atomic session/run completion, revision checks, idempotent run reservation, ordered events, worker leases, namespace isolation, and cross-worker file locks. It is the default web-server store.
+
+### `yolop-mcp`
+
+[`packages/yolop-mcp`](packages/yolop-mcp) builds native Pydantic AI MCP toolsets from host-owned stdio and HTTP alias registries. AgentSpec metadata selects aliases and safe narrowing options; the host controls transports, prefixes, timeouts, resource/skill gates, and secret references. Resolved headers and environment values exist only while native MCP connections run.
 
 ### `yolop-webserver`
 
