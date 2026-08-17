@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -43,7 +43,7 @@ class GoalStatus(StrEnum):
 class GoalVerdict(BaseModel):
     """Typed evaluator result based on transcript evidence."""
 
-    verdict: str
+    verdict: Literal["met", "impossible", "unmet"]
     reason: str = ""
 
     def normalized(self) -> str:
