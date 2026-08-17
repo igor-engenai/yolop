@@ -109,7 +109,13 @@ async def test_native_process_capability_starts_a_process(tmp_path) -> None:
             if isinstance(part, ToolReturnPart)
         ]
         if not returns:
-            assert "process_start" in {tool.name for tool in info.function_tools}
+            assert {
+                "process_start",
+                "process_list",
+                "process_inspect",
+                "process_wait",
+                "process_stop",
+            } <= {tool.name for tool in info.function_tools}
             yield {
                 0: DeltaToolCall(
                     name="process_start",
@@ -175,6 +181,41 @@ async def test_local_process_service_filters_and_bounds_output(tmp_path) -> None
 
     assert result.output == "match\n"
     assert result.truncated is False
+    await service.aclose()
+
+
+async def test_local_process_service_bounds_unfiltered_output(tmp_path) -> None:
+    service = LocalProcessService(
+        tmp_path,
+        allowed_commands={Path(sys.executable).name},
+        max_output_bytes=8,
+    )
+    handle = await service.start(sys.executable, ["-c", "print('0123456789')"])
+
+    result = await service.wait(handle)
+
+    assert len(result.output.encode()) <= 8
+    assert result.truncated is True
+    await service.aclose()
+
+
+async def test_local_process_service_does_not_inherit_model_credentials(tmp_path) -> None:
+    service = LocalProcessService(
+        tmp_path,
+        allowed_commands={Path(sys.executable).name},
+        environment={"OPENAI_API_KEY": "secret", "SAFE_PROCESS_VALUE": "yes"},
+    )
+    handle = await service.start(
+        sys.executable,
+        [
+            "-c",
+            "import os; print(os.getenv('OPENAI_API_KEY')); print(os.getenv('SAFE_PROCESS_VALUE'))",
+        ],
+    )
+
+    result = await service.wait(handle)
+
+    assert result.output == "None\nyes\n"
     await service.aclose()
 
 
