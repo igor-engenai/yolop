@@ -14,6 +14,9 @@ dependencies = [
     "pydantic-ai-slim[openai]>=2.31.0",
 ]
 
+[project.scripts]
+yolop-providers = "yolop_providers.cli:main"
+
 [project.entry-points."yolop.model_providers"]
 openai-codex = "yolop_providers:create_codex_model"
 
