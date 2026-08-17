@@ -1,6 +1,6 @@
 from uuid import uuid4
 
-from yolop_session import ExecutionPin
+from yolop_runtime import ExecutionPin
 from yolop_workspace_session import WorkspaceRuntimeStore
 
 

@@ -8,7 +8,7 @@ from httpx import ASGITransport, AsyncClient
 from pydantic_ai import AgentSpec
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.models.function import AgentInfo, FunctionModel
-from yolop_session import ExecutionPin
+from yolop_runtime import ExecutionPin
 from yolop_sqlite_session import SQLiteRuntimeStore
 from yolop_webserver import create_app
 

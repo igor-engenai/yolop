@@ -13,7 +13,7 @@ dependencies = [
     "sse-starlette>=3.0.0,<4",
     "uvicorn>=0.35.0,<1",
     "yolop>=0.1.0,<0.2.0",
-    "yolop-session>=0.1.0,<0.2.0",
+    "yolop-runtime>=0.1.0,<0.2.0",
     "yolop-sqlite-session>=0.1.0,<0.2.0",
     "yolop-workspace-session>=0.1.0,<0.2.0",
 ]

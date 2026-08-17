@@ -233,7 +233,7 @@ result = run.result
 messages = run.all_messages()
 ```
 
-YoloP returns Pydantic AI's native `AgentRunEvents` handle. It does not wrap events, results, messages, or dependencies. `Yolop.execute(...)` is the run-to-completion form for hosts that need Pydantic AI's native event handler and `RunContext`, including steering and cancellation.
+YoloP returns Pydantic AI's native `AgentRunEvents` handle. It does not wrap events, results, or messages. `Yolop.execute(...)` is the run-to-completion form for hosts that need Pydantic AI's native event handler and `RunContext`, including steering and cancellation. Hosts that need durable sessions and runs use `yolop_runtime.Runtime` above this stateless kernel.
 
 ## Packages
 
@@ -245,9 +245,9 @@ The core package contains the stateless runtime, AgentSpec capability discovery,
 
 [`packages/yolop-providers`](packages/yolop-providers) is the optional model-provider distribution. It registers `openai-codex:<model>` through `yolop.model_providers`, adapts ChatGPT subscription OAuth to Pydantic AI's native `OpenAIResponsesModel`, owns device-code login and automatic refresh, and exposes the standalone `yolop-providers` credential command. It does not own the agent loop, messages, tools, streaming events, or session persistence.
 
-### `yolop-session`
+### `yolop-runtime`
 
-[`packages/yolop-session`](packages/yolop-session) defines one storage-independent `RuntimeStore` protocol. It owns namespaced session and run values, execution pins, durable event values, stable errors, and generated identity helpers.
+[`packages/yolop-runtime`](packages/yolop-runtime) provides the host-neutral durable `Runtime` facade and one storage-independent `RuntimeStore` protocol. It owns namespaced session and run values, execution scopes and pins, durable event values, stable errors, generated identity helpers, and generic runtime dependencies. It depends on the core `yolop` kernel, but not on SQLite or host frameworks.
 
 ### `yolop-sqlite-session`
 
@@ -277,6 +277,6 @@ The core package contains the stateless runtime, AgentSpec capability discovery,
 
 AgentSpec contains declarative agent data: instructions, prompts, model configuration, capability names and arguments, bundled skills, and immutable inline custom skills.
 
-Capability implementations and tools are installed Python code. YoloP resolves custom capability names through the `yolop.capabilities` entry-point group. It resolves optional provider-qualified model strings through `yolop.model_providers`. The TUI discovers local authentication flows through `yolop.auth_providers`. Only selected model and capability providers are imported during execution.
+Capability implementations and tools are installed Python code. A host builds an immutable provider catalog from the `yolop.capabilities` and `yolop.model_providers` entry-point groups at startup. Deployment allowlists filter providers before they are imported. The TUI discovers local authentication flows through `yolop.auth_providers`. AgentSpec does not contain module paths or provider code.
 
 Changing prompts, inline skills, or capability arguments creates a new AgentSpec and needs no code release. Existing sessions keep their immutable AgentSpec digest and model pin. A host must create a new session or implement an explicit upgrade operation to change either pin.

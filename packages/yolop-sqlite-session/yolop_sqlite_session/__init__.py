@@ -16,7 +16,7 @@ from pydantic import TypeAdapter, ValidationError
 from pydantic_ai.messages import ModelMessage, ModelMessagesTypeAdapter
 from pydantic_ai.usage import RunUsage
 from pydantic_core import from_json, to_json
-from yolop_session import (
+from yolop_runtime import (
     ExecutionPin,
     IdempotencyConflictError,
     RunAdmissionError,
@@ -177,6 +177,30 @@ class SQLiteRuntimeStore:
 
     async def load_run(self, namespace: str, run_id: str) -> RuntimeRunSnapshot:
         return await _to_thread(self._load_run, namespace, run_id)
+
+    async def list_runs(
+        self,
+        namespace: str,
+        *,
+        session_id: str | None = None,
+    ) -> list[RuntimeRunSnapshot]:
+        return await _to_thread(self._list_runs, namespace, session_id)
+
+    async def cancel_run(
+        self,
+        namespace: str,
+        run_id: str,
+        *,
+        error_code: str = "run_cancelled",
+        error_detail: str = "Run cancelled",
+    ) -> RuntimeRunSnapshot:
+        return await _to_thread(
+            self._cancel_run,
+            namespace,
+            run_id,
+            error_code,
+            error_detail,
+        )
 
     async def claim_run(
         self,
@@ -471,6 +495,70 @@ class SQLiteRuntimeStore:
         validated_id = validate_session_id(run_id)
         with self._connect() as connection:
             return _select_runtime_run(connection, validated_namespace, validated_id)
+
+    def _list_runs(
+        self,
+        namespace: str,
+        session_id: str | None,
+    ) -> list[RuntimeRunSnapshot]:
+        validated_namespace = validate_namespace(namespace)
+        validated_session_id = validate_session_id(session_id) if session_id is not None else None
+        query = f"SELECT {_RUN_COLUMNS} FROM runtime_runs WHERE namespace = ?"
+        parameters: list[str] = [validated_namespace]
+        if validated_session_id is not None:
+            query += " AND session_id = ?"
+            parameters.append(validated_session_id)
+        query += " ORDER BY created_at, id"
+        with self._connect() as connection:
+            rows = connection.execute(query, parameters).fetchall()
+        return [_runtime_run(row) for row in rows]
+
+    def _cancel_run(
+        self,
+        namespace: str,
+        run_id: str,
+        error_code: str,
+        error_detail: str,
+    ) -> RuntimeRunSnapshot:
+        validated_namespace = validate_namespace(namespace)
+        validated_id = validate_session_id(run_id)
+        if not error_code or not error_detail:
+            raise ValueError("Run cancellation requires a stable code and safe detail")
+        now = datetime.now(UTC)
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            run = _select_runtime_run(connection, validated_namespace, validated_id)
+            if run.status in {
+                RunStatus.COMPLETED,
+                RunStatus.FAILED,
+                RunStatus.INTERRUPTED,
+            }:
+                return run
+            connection.execute(
+                """
+                UPDATE runtime_runs
+                SET status = ?, updated_at = ?, owner_id = NULL, lease_expires_at = NULL,
+                    error_code = ?, error_detail = ?
+                WHERE namespace = ? AND id = ?
+                """,
+                (
+                    RunStatus.INTERRUPTED,
+                    now.isoformat(),
+                    error_code,
+                    error_detail,
+                    validated_namespace,
+                    validated_id,
+                ),
+            )
+        return replace(
+            run,
+            status=RunStatus.INTERRUPTED,
+            updated_at=now,
+            owner_id=None,
+            lease_expires_at=None,
+            error_code=error_code,
+            error_detail=error_detail,
+        )
 
     def _claim_run(
         self,

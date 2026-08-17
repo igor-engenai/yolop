@@ -20,6 +20,23 @@ _FORBIDDEN_CORE_REQUIREMENT_NAMES = {
 }
 
 
+def test_runtime_distribution_declares_no_host_framework_dependencies() -> None:
+    requirements = metadata("yolop-runtime").get_all("Requires-Dist") or []
+    base_requirements = {
+        requirement for requirement in requirements if "extra ==" not in requirement
+    }
+
+    assert base_requirements == {
+        "pydantic-ai-slim>=2.31.0",
+        "yolop<0.2.0,>=0.1.0",
+    }
+    forbidden = {"fastapi", "filelock", "sqlite", "textual", "uvicorn"}
+    assert not any(
+        requirement.split(">", 1)[0].split("<", 1)[0].split("=", 1)[0].strip() in forbidden
+        for requirement in base_requirements
+    )
+
+
 def test_core_distribution_declares_only_core_runtime_dependencies() -> None:
     requirements = metadata("yolop").get_all("Requires-Dist") or []
     base_requirements = {
@@ -59,7 +76,7 @@ def test_public_package_imports_load() -> None:
         "yolop": ("ProviderCatalog", "ProviderManifest", "Yolop"),
         "yolop_duckdb": ("DuckDB", "DuckDBDeps"),
         "yolop_providers": ("CodexOAuth", "create_codex_model"),
-        "yolop_session": ("RuntimeStore", "RuntimeSessionSnapshot"),
+        "yolop_runtime": ("ExecutionScope", "Runtime", "RuntimeDeps"),
         "yolop_sqlite_session": ("SQLiteRuntimeStore",),
         "yolop_tui": ("run_tui",),
         "yolop_webserver": ("create_app", "RunLimits"),
@@ -98,7 +115,7 @@ def test_distribution_publishes_install_profiles() -> None:
             "pydantic-ai-slim[openai]",
             "yolop-duckdb",
             "yolop-providers",
-            "yolop-session",
+            "yolop-runtime",
             "yolop-sqlite-session",
             "yolop-tui",
             "yolop-webserver",

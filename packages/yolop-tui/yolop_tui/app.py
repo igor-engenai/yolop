@@ -17,7 +17,7 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models import KnownModelName, Model
 from pydantic_ai.run import EnqueueContent
-from yolop_session import (
+from yolop_runtime import (
     ExecutionPin,
     RuntimeSessionSnapshot,
     RuntimeStore,

@@ -3,15 +3,14 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "yolop-sqlite-session"
+name = "yolop-runtime"
 version = "0.1.0"
-description = "SQLite runtime persistence for YoloP hosts"
+description = "Durable host-neutral Runtime facade for YoloP"
 requires-python = ">=3.12"
 dependencies = [
-    "filelock>=3.20.0",
     "pydantic-ai-slim>=2.31.0",
-    "yolop-runtime>=0.1.0,<0.2.0",
+    "yolop>=0.1.0,<0.2.0",
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["yolop_sqlite_session"]
+packages = ["yolop_runtime"]

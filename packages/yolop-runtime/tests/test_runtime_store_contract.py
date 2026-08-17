@@ -1,6 +1,6 @@
 from pydantic_ai import AgentSpec
 from pytest import raises
-from yolop_session import (
+from yolop_runtime import (
     ExecutionPin,
     InvalidNamespaceError,
     RuntimeSessionSnapshot,

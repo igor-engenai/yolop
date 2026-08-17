@@ -24,7 +24,7 @@ all = [
     "pydantic-ai-slim[openai]>=2.31.0",
     "yolop-duckdb>=0.1.0,<0.2.0",
     "yolop-providers>=0.1.0,<0.2.0",
-    "yolop-session>=0.1.0,<0.2.0",
+    "yolop-runtime>=0.1.0,<0.2.0",
     "yolop-sqlite-session>=0.1.0,<0.2.0",
     "yolop-tui>=0.1.0,<0.2.0",
     "yolop-webserver>=0.1.0,<0.2.0",
@@ -45,7 +45,7 @@ dev = [
     "ty>=0.0.72",
     "yolop-duckdb",
     "yolop-providers",
-    "yolop-session",
+    "yolop-runtime",
     "yolop-sqlite-session",
     "yolop-tui",
     "yolop-webserver",
@@ -60,7 +60,7 @@ package = true
 yolop = { workspace = true }
 yolop-duckdb = { workspace = true }
 yolop-providers = { workspace = true }
-yolop-session = { workspace = true }
+yolop-runtime = { workspace = true }
 yolop-sqlite-session = { workspace = true }
 yolop-tui = { workspace = true }
 yolop-webserver = { workspace = true }
@@ -71,7 +71,7 @@ yolop-workspace-session = { workspace = true }
 members = [
     "packages/yolop-duckdb",
     "packages/yolop-providers",
-    "packages/yolop-session",
+    "packages/yolop-runtime",
     "packages/yolop-sqlite-session",
     "packages/yolop-tui",
     "packages/yolop-webserver",
@@ -86,7 +86,7 @@ testpaths = [
     "tests",
     "packages/yolop-duckdb/tests",
     "packages/yolop-providers/tests",
-    "packages/yolop-session/tests",
+    "packages/yolop-runtime/tests",
     "packages/yolop-sqlite-session/tests",
     "packages/yolop-tui/tests",
     "packages/yolop-webserver/tests",

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import duckdb
 from pydantic_ai import AgentSpec
-from yolop_session import ExecutionPin, ensure_session_pin
+from yolop_runtime import ExecutionPin, ensure_session_pin
 from yolop_workspace_session import WorkspaceRuntimeStore
 
 from yolop import Yolop

@@ -19,7 +19,7 @@ from pydantic_ai.messages import ModelMessagesTypeAdapter
 from pydantic_ai.models import KnownModelName, Model
 from pydantic_ai.usage import RunUsage
 from sse_starlette import EventSourceResponse
-from yolop_session import (
+from yolop_runtime import (
     ExecutionPin,
     IdempotencyConflictError,
     InvalidSessionIdError,

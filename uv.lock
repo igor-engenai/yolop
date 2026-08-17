@@ -7,7 +7,7 @@ members = [
     "yolop",
     "yolop-duckdb",
     "yolop-providers",
-    "yolop-session",
+    "yolop-runtime",
     "yolop-sqlite-session",
     "yolop-tui",
     "yolop-webserver",
@@ -1168,7 +1168,7 @@ all = [
     { name = "pydantic-ai-slim", extra = ["openai"] },
     { name = "yolop-duckdb" },
     { name = "yolop-providers" },
-    { name = "yolop-session" },
+    { name = "yolop-runtime" },
     { name = "yolop-sqlite-session" },
     { name = "yolop-tui" },
     { name = "yolop-webserver" },
@@ -1204,7 +1204,7 @@ dev = [
     { name = "ty" },
     { name = "yolop-duckdb" },
     { name = "yolop-providers" },
-    { name = "yolop-session" },
+    { name = "yolop-runtime" },
     { name = "yolop-sqlite-session" },
     { name = "yolop-tui" },
     { name = "yolop-webserver" },
@@ -1222,7 +1222,7 @@ requires-dist = [
     { name = "yolop-duckdb", marker = "extra == 'duckdb'", editable = "packages/yolop-duckdb" },
     { name = "yolop-providers", marker = "extra == 'all'", editable = "packages/yolop-providers" },
     { name = "yolop-providers", marker = "extra == 'providers'", editable = "packages/yolop-providers" },
-    { name = "yolop-session", marker = "extra == 'all'", editable = "packages/yolop-session" },
+    { name = "yolop-runtime", marker = "extra == 'all'", editable = "packages/yolop-runtime" },
     { name = "yolop-sqlite-session", marker = "extra == 'all'", editable = "packages/yolop-sqlite-session" },
     { name = "yolop-tui", marker = "extra == 'all'", editable = "packages/yolop-tui" },
     { name = "yolop-tui", marker = "extra == 'tui'", editable = "packages/yolop-tui" },
@@ -1244,7 +1244,7 @@ dev = [
     { name = "ty", specifier = ">=0.0.72" },
     { name = "yolop-duckdb", editable = "packages/yolop-duckdb" },
     { name = "yolop-providers", editable = "packages/yolop-providers" },
-    { name = "yolop-session", editable = "packages/yolop-session" },
+    { name = "yolop-runtime", editable = "packages/yolop-runtime" },
     { name = "yolop-sqlite-session", editable = "packages/yolop-sqlite-session" },
     { name = "yolop-tui", editable = "packages/yolop-tui" },
     { name = "yolop-webserver", editable = "packages/yolop-webserver" },
@@ -1287,15 +1287,19 @@ requires-dist = [
 ]
 
 [[package]]
-name = "yolop-session"
+name = "yolop-runtime"
 version = "0.1.0"
-source = { editable = "packages/yolop-session" }
+source = { editable = "packages/yolop-runtime" }
 dependencies = [
     { name = "pydantic-ai-slim" },
+    { name = "yolop" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "pydantic-ai-slim", specifier = ">=2.31.0" }]
+requires-dist = [
+    { name = "pydantic-ai-slim", specifier = ">=2.31.0" },
+    { name = "yolop", editable = "." },
+]
 
 [[package]]
 name = "yolop-sqlite-session"
@@ -1304,14 +1308,14 @@ source = { editable = "packages/yolop-sqlite-session" }
 dependencies = [
     { name = "filelock" },
     { name = "pydantic-ai-slim" },
-    { name = "yolop-session" },
+    { name = "yolop-runtime" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "filelock", specifier = ">=3.20.0" },
     { name = "pydantic-ai-slim", specifier = ">=2.31.0" },
-    { name = "yolop-session", editable = "packages/yolop-session" },
+    { name = "yolop-runtime", editable = "packages/yolop-runtime" },
 ]
 
 [[package]]
@@ -1323,7 +1327,7 @@ dependencies = [
     { name = "rich" },
     { name = "textual" },
     { name = "yolop" },
-    { name = "yolop-session" },
+    { name = "yolop-runtime" },
     { name = "yolop-sqlite-session" },
     { name = "yolop-workspace" },
 ]
@@ -1334,7 +1338,7 @@ requires-dist = [
     { name = "rich", specifier = ">=14.2.0,<15" },
     { name = "textual", specifier = ">=6,<7" },
     { name = "yolop", editable = "." },
-    { name = "yolop-session", editable = "packages/yolop-session" },
+    { name = "yolop-runtime", editable = "packages/yolop-runtime" },
     { name = "yolop-sqlite-session", editable = "packages/yolop-sqlite-session" },
     { name = "yolop-workspace", editable = "packages/yolop-workspace" },
 ]
@@ -1349,7 +1353,7 @@ dependencies = [
     { name = "sse-starlette" },
     { name = "uvicorn" },
     { name = "yolop" },
-    { name = "yolop-session" },
+    { name = "yolop-runtime" },
     { name = "yolop-sqlite-session" },
     { name = "yolop-workspace-session" },
 ]
@@ -1361,7 +1365,7 @@ requires-dist = [
     { name = "sse-starlette", specifier = ">=3.0.0,<4" },
     { name = "uvicorn", specifier = ">=0.35.0,<1" },
     { name = "yolop", editable = "." },
-    { name = "yolop-session", editable = "packages/yolop-session" },
+    { name = "yolop-runtime", editable = "packages/yolop-runtime" },
     { name = "yolop-sqlite-session", editable = "packages/yolop-sqlite-session" },
     { name = "yolop-workspace-session", editable = "packages/yolop-workspace-session" },
 ]

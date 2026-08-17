@@ -31,7 +31,7 @@ from pydantic_ai.models.function import (
 from pydantic_ai.toolsets.function import FunctionToolset
 from pytest import MonkeyPatch, fixture, mark, raises
 from rich.console import Console, RenderableType
-from yolop_session import ExecutionPin, SessionPinMismatchError
+from yolop_runtime import ExecutionPin, SessionPinMismatchError
 from yolop_sqlite_session import SQLiteRuntimeStore
 from yolop_tui import run_tui
 from yolop_tui.selection import SelectionOption

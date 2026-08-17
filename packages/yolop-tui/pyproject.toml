@@ -12,7 +12,7 @@ dependencies = [
     "rich>=14.2.0,<15",
     "textual>=6,<7",
     "yolop>=0.1.0",
-    "yolop-session>=0.1.0",
+    "yolop-runtime>=0.1.0",
     "yolop-sqlite-session>=0.1.0",
     "yolop-workspace>=0.1.0",
 ]

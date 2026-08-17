@@ -5,7 +5,7 @@ from collections.abc import Sequence
 
 from pydantic_ai.messages import ModelMessage, ModelRequest, UserPromptPart
 from pytest import raises
-from yolop_session import (
+from yolop_runtime import (
     ExecutionPin,
     RuntimeStoreSchemaError,
     SessionConflictError,

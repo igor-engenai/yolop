@@ -11,7 +11,7 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pytest import LogCaptureFixture, MonkeyPatch
 from textual.pilot import Pilot
 from textual.widgets import Static
-from yolop_session import ExecutionPin
+from yolop_runtime import ExecutionPin
 from yolop_sqlite_session import SQLiteRuntimeStore
 from yolop_tui import run_tui
 from yolop_tui.textual_app import TextualTerminal

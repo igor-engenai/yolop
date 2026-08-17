@@ -7,7 +7,7 @@ import duckdb
 from pydantic_ai import AgentSpec
 from pydantic_ai.messages import ModelMessage, ModelRequest, ToolReturnPart
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, DeltaToolCalls, FunctionModel
-from yolop_session import ExecutionPin
+from yolop_runtime import ExecutionPin
 from yolop_workspace_session import WorkspaceRuntimeStore
 
 from yolop import Yolop

@@ -4,7 +4,7 @@ from uuid import UUID
 from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
 from pydantic_ai.usage import RunUsage
 from pytest import raises
-from yolop_session import (
+from yolop_runtime import (
     ExecutionPin,
     IdempotencyConflictError,
     RunAdmissionError,
@@ -99,6 +99,31 @@ async def test_run_reservation_enforces_a_per_session_limit(tmp_path) -> None:
 
     assert replay.created is False
     assert replay.run.id == first.run.id
+
+
+async def test_runs_can_be_listed_and_cancelled(tmp_path) -> None:
+    store = SQLiteRuntimeStore(tmp_path / "runtime.db")
+    pin = ExecutionPin(agent_spec_id="a" * 64, model_id="openai:model")
+    session = await store.create_session("tenant/acme", pin=pin)
+    first = await store.reserve_run(
+        "tenant/acme",
+        session.id,
+        idempotency_key="request-1",
+        prompt="First",
+    )
+    second = await store.reserve_run(
+        "tenant/acme",
+        session.id,
+        idempotency_key="request-2",
+        prompt="Second",
+    )
+
+    listed = await store.list_runs("tenant/acme", session_id=session.id)
+    cancelled = await store.cancel_run("tenant/acme", first.run.id)
+
+    assert [run.id for run in listed] == [first.run.id, second.run.id]
+    assert cancelled.status is RunStatus.INTERRUPTED
+    assert (await store.cancel_run("tenant/acme", first.run.id)) == cancelled
 
 
 async def test_claimed_run_events_are_ordered_and_durable(tmp_path) -> None:

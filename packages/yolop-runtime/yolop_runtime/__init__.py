@@ -5,10 +5,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from hashlib import sha256
-from typing import Any, Protocol
+from typing import Any, Protocol, TypeVar
 from uuid import UUID, uuid4
 
-from pydantic_ai import AgentSpec
+from pydantic_ai import AgentSpec, AgentStreamEvent
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.usage import RunUsage
 
@@ -83,6 +83,72 @@ class SessionLockTimeoutError(TimeoutError):
     """A session lock could not be acquired before its deadline."""
 
     code = "session_lock_timeout"
+
+
+@dataclass(frozen=True)
+class ExecutionScope:
+    """Identity for one durable runtime execution."""
+
+    namespace: str
+    session_id: str
+    run_id: str
+    parent_run_id: str | None = None
+    root_run_id: str | None = None
+    initiator: str = "user"
+
+    def __post_init__(self) -> None:
+        validate_namespace(self.namespace)
+        validate_session_id(self.session_id)
+        validate_session_id(self.run_id)
+        if self.parent_run_id is not None:
+            validate_session_id(self.parent_run_id)
+        if self.root_run_id is None:
+            object.__setattr__(self, "root_run_id", self.run_id)
+        else:
+            validate_session_id(self.root_run_id)
+        if not self.initiator.strip():
+            raise ValueError("Execution initiator must not be empty")
+
+
+class ScopedState(Protocol):
+    """Host-provided state access already scoped to the current execution."""
+
+    async def get(self, key: str) -> Any: ...
+
+    async def set(self, key: str, value: Any) -> None: ...
+
+    async def delete(self, key: str) -> None: ...
+
+
+class RuntimeEventSink(Protocol):
+    """Receives native Pydantic AI stream events without translation."""
+
+    async def emit(self, event: AgentStreamEvent) -> None: ...
+
+
+class RuntimeFollowUpSink(Protocol):
+    """Receives host follow-up prompts for the current execution."""
+
+    async def enqueue(self, prompt: str) -> None: ...
+
+
+HostDepsT = TypeVar("HostDepsT")
+StateT = TypeVar("StateT")
+
+
+@dataclass(frozen=True)
+class RuntimeDeps[HostDepsT, StateT]:
+    """Dependencies exposed to one runtime execution."""
+
+    scope: ExecutionScope
+    state: StateT | None
+    event_sink: RuntimeEventSink | None
+    follow_up_sink: RuntimeFollowUpSink | None
+    host: HostDepsT
+
+    def __getattr__(self, name: str) -> Any:
+        """Keep existing host capabilities usable while exposing the runtime envelope."""
+        return getattr(self.host, name)
 
 
 @dataclass(frozen=True)
@@ -220,6 +286,22 @@ class RuntimeStore(Protocol):
 
     async def load_run(self, namespace: str, run_id: str) -> RuntimeRunSnapshot: ...
 
+    async def list_runs(
+        self,
+        namespace: str,
+        *,
+        session_id: str | None = None,
+    ) -> list[RuntimeRunSnapshot]: ...
+
+    async def cancel_run(
+        self,
+        namespace: str,
+        run_id: str,
+        *,
+        error_code: str = "run_cancelled",
+        error_detail: str = "Run cancelled",
+    ) -> RuntimeRunSnapshot: ...
+
     async def claim_run(
         self,
         namespace: str,
@@ -330,6 +412,7 @@ def validate_session_id(session_id: str) -> str:
 
 __all__ = [
     "ExecutionPin",
+    "ExecutionScope",
     "IdempotencyConflictError",
     "InvalidNamespaceError",
     "InvalidSessionIdError",
@@ -341,13 +424,18 @@ __all__ = [
     "RunStatus",
     "RuntimeRunSnapshot",
     "RuntimeSessionSnapshot",
+    "RuntimeDeps",
+    "RuntimeEventSink",
+    "RuntimeFollowUpSink",
     "RuntimeStore",
+    "Runtime",
     "RuntimeStoreSchemaError",
     "SessionConflictError",
     "SessionFormatError",
     "SessionLockTimeoutError",
     "SessionNotFoundError",
     "SessionPinMismatchError",
+    "ScopedState",
     "StoredRunEvent",
     "agent_spec_digest",
     "ensure_session_pin",
@@ -355,3 +443,5 @@ __all__ = [
     "validate_namespace",
     "validate_session_id",
 ]
+
+from .runtime import Runtime  # noqa: E402

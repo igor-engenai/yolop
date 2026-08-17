@@ -6,7 +6,7 @@ from hashlib import sha256
 from pathlib import Path
 
 from pydantic_ai import AgentSpec
-from yolop_session import ExecutionPin
+from yolop_runtime import ExecutionPin
 from yolop_sqlite_session import SQLiteRuntimeStore
 
 from .app import run_tui
