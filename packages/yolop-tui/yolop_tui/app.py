@@ -19,11 +19,13 @@ from pydantic_ai.run import EnqueueContent
 from yolop_runtime import (
     CompactionUnsupportedError,
     ExecutionPin,
+    RunStatus,
     Runtime,
     RuntimeContextSink,
     RuntimeEventSink,
     RuntimeSessionSnapshot,
     RuntimeStore,
+    RunTreeNode,
     SessionConflictError,
     SessionNotFoundError,
     ensure_session_pin,
@@ -44,7 +46,7 @@ _PROVIDER_INSTALL_HINT = (
     'No authentication providers are installed. Install with `uv add "yolop[tui,providers]"`.'
 )
 _HELP_TEXT = (
-    "Commands: /new  /resume  /compact [focus]  /goal <condition>  "
+    "Commands: /new  /resume  /history  /compact [focus]  /goal <condition>  "
     "/goal-status  /goal-stop  /goal-resume  /login  /logout  /help  /quit\n"
     "Scroll: PageUp/PageDown or mouse wheel · End: newest output"
 )
@@ -173,6 +175,56 @@ async def run_tui[DepsT](
             if command == "/help":
                 transcript.add_notice(_HELP_TEXT)
                 render_transcript()
+                continue
+            if command == "/history":
+                try:
+                    tree = await runtime.list_run_tree(namespace, session_id=session.id)
+                    options = _run_history_options(tree)
+                    if not options:
+                        transcript.add_notice("No terminal Runs in this Session")
+                    else:
+                        selected = await terminal.choose(
+                            options,
+                            title="Run history",
+                            placeholder="Filter Runs or actions",
+                        )
+                        if selected is not None:
+                            action, _, run_id = selected.partition(":")
+                            current = await runtime.load_session(namespace, session.id)
+                            if action == "checkout":
+                                session = await runtime.checkout(
+                                    namespace,
+                                    session.id,
+                                    run_id,
+                                    expected_revision=current.revision,
+                                )
+                                transcript.reset(session.messages)
+                                transcript.add_notice(
+                                    f"Checked out Run {run_id[:8]} "
+                                    "(session history changed; workspace unchanged)"
+                                )
+                            elif action == "fork":
+                                session = await runtime.fork_session(
+                                    namespace,
+                                    session.id,
+                                    run_id,
+                                    expected_revision=current.revision,
+                                )
+                                transcript.reset(session.messages)
+                                active_goal_id = None
+                                transcript.add_notice(
+                                    f"Forked Session {session.id[:8]} from Run {run_id[:8]} "
+                                    "(workspace unchanged)"
+                                )
+                except SessionConflictError:
+                    transcript.add_error("Session changed; history action was not saved")
+                except Exception as error:
+                    transcript.add_error(f"History action failed: {error}")
+                render_transcript()
+                refresh_status()
+                focus_editor = getattr(terminal, "focus_editor", None)
+                if callable(focus_editor):
+                    focus_editor()
                 continue
             if command == "/goal" or command.startswith("/goal "):
                 condition = text.strip()[len("/goal") :].strip()
@@ -514,6 +566,36 @@ async def _run_turn[DepsT](
     transcript.reset(completion.session.messages)
     render_transcript()
     return completion.session
+
+
+def _run_history_options(tree: Sequence[RunTreeNode]) -> list[SelectionOption]:
+    options: list[SelectionOption] = []
+
+    def visit(node: RunTreeNode, depth: int) -> None:
+        if node.run.status in {
+            RunStatus.COMPLETED,
+            RunStatus.FAILED,
+            RunStatus.INTERRUPTED,
+        }:
+            prompt = " ".join(node.run.prompt.split()) or "(empty prompt)"
+            branch_count = len(node.children)
+            branch = f" · {branch_count} child Run(s)" if branch_count else ""
+            selected = " · selected" if node.selected else ""
+            label = node.label or ""
+            label_text = f" · label: {label}" if label else ""
+            prefix = "  " * depth
+            summary = (
+                f"{prefix}{node.run.id[:8]} · {node.run.status.value} · {prompt}"
+                f"{branch}{selected}{label_text}"
+            )
+            options.append(SelectionOption(f"checkout:{node.run.id}", f"Checkout · {summary}"))
+            options.append(SelectionOption(f"fork:{node.run.id}", f"Fork · {summary}"))
+        for child in node.children:
+            visit(child, depth + 1)
+
+    for root in tree:
+        visit(root, 0)
+    return options
 
 
 def _selected_capability(

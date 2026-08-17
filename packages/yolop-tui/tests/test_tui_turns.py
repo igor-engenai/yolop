@@ -32,12 +32,19 @@ from pydantic_ai.toolsets.function import FunctionToolset
 from pytest import MonkeyPatch, fixture, mark, raises
 from rich.console import Console, RenderableType
 from yolop_context import Compaction
-from yolop_runtime import ExecutionPin, SessionPinMismatchError
+from yolop_runtime import ExecutionPin, Runtime, SessionPinMismatchError
 from yolop_sqlite_session import SQLiteRuntimeStore
 from yolop_tui import run_tui
 from yolop_tui.selection import SelectionOption
 
 from yolop import ProviderCatalog
+
+
+async def _unused_response(
+    _messages: list[ModelMessage],
+    _info: AgentInfo,
+) -> AsyncIterator[str]:
+    yield "unexpected"
 
 
 class CapturingOutput:
@@ -114,7 +121,11 @@ class _ScriptedTerminal:
     async def wait_until_ready(self) -> None:
         await self._ready.wait()
 
-    async def choose(self, options: list[SelectionOption]) -> str | None:
+    async def choose(
+        self,
+        options: list[SelectionOption],
+        **_kwargs: Any,
+    ) -> str | None:
         self._selection = tuple(options)
         self._selection_future = asyncio.get_running_loop().create_future()
         self._buffer = ""
@@ -802,7 +813,7 @@ async def test_help_lists_only_the_minimal_commands(tmp_path: Path) -> None:
             pipe_input.send_text("/help\r")
             await _wait_for_output(
                 output,
-                "Commands: /new  /resume  /compact [focus]  /goal <condition>",
+                "Commands: /new  /resume  /history  /compact [focus]  /goal <condition>",
             )
             await _wait_for_output(output, "/goal-status")
             await _wait_for_output(output, "Scroll: PageUp/PageDown or mouse wheel")
@@ -853,6 +864,86 @@ async def test_compact_command_uses_the_selected_runtime_capability(tmp_path: Pa
             await _wait_for_output(output, "Session context compacted")
             pipe_input.send_text("/quit\r")
             await asyncio.wait_for(running, timeout=1)
+
+
+async def test_history_command_handles_empty_session(tmp_path: Path) -> None:
+    output = CapturingOutput()
+    store = SQLiteRuntimeStore(tmp_path / "runtime.db")
+    with create_pipe_input() as pipe_input:
+        with create_app_session(input=pipe_input, output=output):
+            running = asyncio.create_task(
+                run_tui(
+                    AgentSpec(),
+                    store=store,
+                    namespace="test",
+                    deps=None,
+                    deps_type=type(None),
+                    model="test:model",
+                    model_id="test:model",
+                    cwd=tmp_path,
+                )
+            )
+            await _wait_for_output(output, "╭─ prompt")
+            pipe_input.send_text("/history\r")
+            await _wait_for_output(output, "No terminal Runs in this Session")
+            pipe_input.send_text("/quit\r")
+            await asyncio.wait_for(running, timeout=1)
+
+
+async def test_history_picker_can_fork_a_terminal_run(tmp_path: Path) -> None:
+    output = CapturingOutput()
+    store = SQLiteRuntimeStore(tmp_path / "runtime.db")
+    spec = AgentSpec(model="test:model")
+    runtime = Runtime(store=store)
+    session = await runtime.create_session("test", spec=spec, model_id="test:model")
+    first = await runtime.run(
+        "test",
+        session.id,
+        "first",
+        spec=spec,
+        model=FunctionModel(stream_function=_unused_response),
+        model_id="test:model",
+        deps=None,
+        deps_type=type(None),
+        idempotency_key="first",
+    )
+    await runtime.run_related(
+        "test",
+        session.id,
+        "second",
+        parent_run_id=first.run.id,
+        spec=spec,
+        model=FunctionModel(stream_function=_unused_response),
+        model_id="test:model",
+        deps=None,
+        deps_type=type(None),
+        idempotency_key="second",
+    )
+
+    with create_pipe_input() as pipe_input:
+        with create_app_session(input=pipe_input, output=output):
+            running = asyncio.create_task(
+                run_tui(
+                    spec,
+                    store=store,
+                    namespace="test",
+                    deps=None,
+                    deps_type=type(None),
+                    model=FunctionModel(stream_function=_unused_response),
+                    model_id="test:model",
+                    session_id=session.id,
+                    cwd=tmp_path,
+                )
+            )
+            await _wait_for_output(output, "╭─ prompt")
+            pipe_input.send_text("/history\r")
+            await _wait_for_output(output, "Fork ·")
+            pipe_input.send_text("Fork\r")
+            await _wait_for_output(output, "Forked Session")
+            pipe_input.send_text("/quit\r")
+            await asyncio.wait_for(running, timeout=1)
+
+    assert len(await store.list_sessions("test")) == 2
 
 
 async def test_goal_status_reports_when_no_goal_is_selected(tmp_path: Path) -> None:
