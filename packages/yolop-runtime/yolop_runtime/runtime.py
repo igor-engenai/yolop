@@ -18,6 +18,7 @@ from pydantic_ai.usage import UsageLimits
 from yolop import ProviderCatalog, Yolop
 
 from . import (
+    CompactionUnsupportedError,
     ExecutionPin,
     ExecutionScope,
     HostDepsT,
@@ -28,6 +29,7 @@ from . import (
     RunStateError,
     RunStatus,
     RuntimeBudget,
+    RuntimeCompactor,
     RuntimeContextSink,
     RuntimeDeadlineExceededError,
     RuntimeDeps,
@@ -94,6 +96,75 @@ class Runtime[HostDepsT]:
             session_id,
             expected_revision=session.revision,
         )
+
+    async def compact_session(
+        self,
+        namespace: str,
+        session_id: str,
+        *,
+        spec: AgentSpec | dict[str, Any],
+        model: Model | KnownModelName | str | None = None,
+        model_id: str | None = None,
+        deps: HostDepsT,
+        compactor: RuntimeCompactor | None,
+        focus: str | None = None,
+    ) -> RuntimeSessionSnapshot:
+        """Compact one Session's active history through a host-selected capability."""
+        if compactor is None:
+            raise CompactionUnsupportedError(
+                "The selected AgentSpec does not provide manual compaction"
+            )
+        self.kernel.provider_catalog.validate_spec(spec)
+        resolved_model_id = _model_id(spec, model=model, model_id=model_id)
+        session = await self.store.load_session(namespace, session_id)
+        ensure_session_pin(
+            session,
+            ExecutionPin.from_spec(spec, model_id=resolved_model_id),
+        )
+        resolved_model = _resolve_compaction_model(spec, model, self.kernel.provider_catalog)
+        run_id = session.head_run_id or session.id
+        scope = ExecutionScope(
+            namespace=namespace,
+            session_id=session.id,
+            run_id=run_id,
+            root_run_id=run_id,
+            initiator="manual_compaction",
+        )
+        runtime_deps = RuntimeDeps(
+            scope=scope,
+            state=ScopedStateContext(
+                store=self.store,
+                namespace=namespace,
+                session_id=session.id,
+                run_id=run_id,
+            ),
+            event_sink=None,
+            follow_up_sink=None,
+            host=deps,
+        )
+        async with self.store.lock_session(
+            namespace,
+            session.id,
+            timeout=self.session_lock_timeout,
+        ):
+            current = await self.store.load_session(namespace, session.id)
+            ensure_session_pin(
+                current,
+                ExecutionPin.from_spec(spec, model_id=resolved_model_id),
+            )
+            compacted = await compactor.compact(
+                current.messages,
+                focus=focus,
+                model=resolved_model,
+                deps=runtime_deps,
+                scope=scope,
+            )
+            return await self.store.replace_session(
+                namespace,
+                session.id,
+                expected_revision=current.revision,
+                messages=compacted,
+            )
 
     async def reserve_run(
         self,
@@ -571,6 +642,21 @@ def _event_handler(
             )
 
     return handle
+
+
+def _resolve_compaction_model(
+    spec: AgentSpec | dict[str, Any],
+    model: Model | KnownModelName | str | None,
+    catalog: ProviderCatalog,
+) -> Model | KnownModelName | str:
+    if isinstance(model, str):
+        return catalog.resolve_model_reference(model)
+    if model is not None:
+        return model
+    value = spec.model if isinstance(spec, AgentSpec) else spec.get("model")
+    if isinstance(value, str):
+        return catalog.resolve_model_reference(value)
+    raise ValueError("model is required for manual compaction")
 
 
 def _model_id(

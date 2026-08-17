@@ -11,12 +11,15 @@ from typing import Any, Literal, Protocol, runtime_checkable
 
 from pydantic_ai.capabilities import AbstractCapability, CombinedCapability
 from pydantic_ai.exceptions import ModelRetry, UserError
-from pydantic_ai.models import Model
+from pydantic_ai.messages import ModelMessage
+from pydantic_ai.models import Model, infer_model
 from pydantic_ai.tools import RunContext
+from pydantic_ai.usage import RunUsage
 from pydantic_ai_harness.compaction import (
     ClearToolResults,
     DeduplicateFileReads,
     SummarizingCompaction,
+    SupportsFocus,
     TieredCompaction,
     TranscriptHandleProvider,
 )
@@ -532,6 +535,41 @@ class Compaction(AbstractCapability[Any]):
         if isinstance(scope, ContextScope):
             return CombinedCapability([tiered, TranscriptHandle(handle=scope.run_id)])
         return tiered
+
+    async def compact(
+        self,
+        messages: Sequence[ModelMessage],
+        *,
+        focus: str | None,
+        model: Model | str,
+        deps: Any,
+        scope: ContextScope,
+    ) -> list[ModelMessage]:
+        """Compact active messages using the same strategy as automatic runs."""
+        resolved_model = infer_model(model) if isinstance(model, str) else model
+        transcript = TranscriptHandle(handle=scope.run_id)
+        capabilities: dict[str, AbstractCapability[Any]] = {"TranscriptHandle": transcript}
+        context = RunContext(
+            deps=deps,
+            model=resolved_model,
+            usage=RunUsage(),
+            run_id=scope.run_id,
+            capabilities=capabilities,
+        )
+        bound = await self.for_run(context)
+        if isinstance(bound, CombinedCapability):
+            strategy = next(
+                capability
+                for capability in bound.capabilities
+                if isinstance(capability, TieredCompaction)
+            )
+        else:
+            if not isinstance(bound, TieredCompaction):
+                raise ContextConfigurationError("Compaction did not build a tiered strategy")
+            strategy = bound
+        if focus is not None and isinstance(strategy, SupportsFocus):
+            strategy = strategy.with_focus(focus)
+        return await strategy.compact(list(messages), context)
 
 
 @dataclass

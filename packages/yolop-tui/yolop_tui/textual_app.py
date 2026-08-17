@@ -699,6 +699,10 @@ class TextualTerminal:
         if self.app.is_running:
             self.app.query_one("#editor", _PromptEditor).restore_text(text)
 
+    def focus_editor(self) -> None:
+        if self.app.is_running:
+            self.app.query_one("#editor", _PromptEditor).focus()
+
     def stop(self) -> None:
         self.app.exit()
 

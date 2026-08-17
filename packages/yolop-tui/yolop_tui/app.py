@@ -17,6 +17,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.models import KnownModelName, Model
 from pydantic_ai.run import EnqueueContent
 from yolop_runtime import (
+    CompactionUnsupportedError,
     ExecutionPin,
     Runtime,
     RuntimeContextSink,
@@ -43,7 +44,7 @@ _PROVIDER_INSTALL_HINT = (
     'No authentication providers are installed. Install with `uv add "yolop[tui,providers]"`.'
 )
 _HELP_TEXT = (
-    "Commands: /new  /resume  /login  /logout  /help  /quit\n"
+    "Commands: /new  /resume  /compact [focus]  /login  /logout  /help  /quit\n"
     "Scroll: PageUp/PageDown or mouse wheel · End: newest output"
 )
 
@@ -170,6 +171,39 @@ async def run_tui[DepsT](
             if command == "/help":
                 transcript.add_notice(_HELP_TEXT)
                 render_transcript()
+                continue
+            if command == "/compact" or command.startswith("/compact "):
+                focus = text.strip()[len("/compact") :].strip() or None
+                compactor = _selected_capability(
+                    spec,
+                    runtime.kernel.provider_catalog,
+                    "Compaction",
+                )
+                try:
+                    session = await runtime.compact_session(
+                        namespace,
+                        session.id,
+                        spec=spec,
+                        model=model,
+                        model_id=pin.model_id,
+                        deps=deps,
+                        compactor=compactor,
+                        focus=focus,
+                    )
+                except CompactionUnsupportedError as error:
+                    transcript.add_error(str(error))
+                except SessionConflictError:
+                    session = await runtime.load_session(namespace, session.id)
+                    transcript.reset(session.messages)
+                    transcript.add_error("Session changed; manual compaction was not saved")
+                else:
+                    transcript.reset(session.messages)
+                    transcript.add_notice("Session context compacted")
+                render_transcript()
+                refresh_status()
+                focus_editor = getattr(terminal, "focus_editor", None)
+                if callable(focus_editor):
+                    focus_editor()
                 continue
             if command in {"/login", "/logout"}:
                 if auth_providers is None:
@@ -371,6 +405,20 @@ async def _run_turn[DepsT](
     transcript.reset(completion.session.messages)
     render_transcript()
     return completion.session
+
+
+def _selected_capability(
+    spec: AgentSpec,
+    catalog: ProviderCatalog,
+    name: str,
+) -> Any | None:
+    if not catalog.has_capability(name):
+        return None
+    capability_type = catalog.capability_type(name)
+    for capability in spec.capabilities:
+        if capability.name == name:
+            return capability_type.from_spec(*capability.args, **capability.kwargs)
+    return None
 
 
 def _execution_pin(

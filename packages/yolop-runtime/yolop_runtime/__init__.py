@@ -91,6 +91,12 @@ class RuntimeStoreSchemaError(RuntimeError):
     code = "runtime_store_schema_mismatch"
 
 
+class CompactionUnsupportedError(RuntimeError):
+    """The selected AgentSpec does not provide a manual compaction capability."""
+
+    code = "compaction_unsupported"
+
+
 class SessionLockTimeoutError(TimeoutError):
     """A session lock could not be acquired before its deadline."""
 
@@ -156,6 +162,20 @@ class RuntimeContextSink(Protocol):
     """Receives the native RunContext for steering an active Run."""
 
     async def set_context(self, context: Any) -> None: ...
+
+
+class RuntimeCompactor(Protocol):
+    """Host/plugin compactor used by the generic manual Session operation."""
+
+    async def compact(
+        self,
+        messages: Sequence[ModelMessage],
+        *,
+        focus: str | None,
+        model: Any,
+        deps: Any,
+        scope: ExecutionScope,
+    ) -> list[ModelMessage]: ...
 
 
 class RuntimeFollowUpSink(Protocol):
@@ -766,12 +786,14 @@ __all__ = [
     "RuntimeBudget",
     "RuntimeDeadlineExceededError",
     "RuntimeDeps",
+    "RuntimeCompactor",
     "RuntimeContextSink",
     "RuntimeEventSink",
     "RuntimeFollowUpSink",
     "RuntimeStore",
     "Runtime",
     "RuntimeStoreSchemaError",
+    "CompactionUnsupportedError",
     "RootBudgetSnapshot",
     "ScopedStateContext",
     "SessionConflictError",
