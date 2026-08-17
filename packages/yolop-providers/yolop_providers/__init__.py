@@ -8,6 +8,7 @@ from .credentials import (
     OAuthCredential,
     default_auth_path,
 )
+from .models import OpenAICodexProvider, create_codex_model
 
 __all__ = [
     "CodexNotAuthenticatedError",
@@ -18,5 +19,7 @@ __all__ = [
     "CredentialStoreError",
     "DeviceAuthorization",
     "OAuthCredential",
+    "OpenAICodexProvider",
+    "create_codex_model",
     "default_auth_path",
 ]

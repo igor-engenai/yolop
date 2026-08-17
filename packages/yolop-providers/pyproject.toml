@@ -11,7 +11,11 @@ dependencies = [
     "filelock>=3.20.0,<4",
     "httpx>=0.28.1,<0.29",
     "pydantic>=2.12.0,<3",
+    "pydantic-ai-slim[openai]>=2.31.0",
 ]
+
+[project.entry-points."yolop.model_providers"]
+openai-codex = "yolop_providers:create_codex_model"
 
 [tool.hatch.build.targets.wheel]
 packages = ["yolop_providers"]
