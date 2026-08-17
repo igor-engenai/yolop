@@ -806,6 +806,36 @@ async def test_help_lists_only_the_minimal_commands(tmp_path: Path) -> None:
             await asyncio.wait_for(running, timeout=1)
 
 
+async def test_login_explains_how_to_install_auth_providers(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(tui_app, "_AUTH_PROVIDER_LOADER", lambda: ())
+    output = CapturingOutput()
+    store = SQLiteRuntimeStore(tmp_path / "runtime.db")
+
+    with create_pipe_input() as pipe_input:
+        with create_app_session(input=pipe_input, output=output):
+            running = asyncio.create_task(
+                run_tui(
+                    AgentSpec(),
+                    store=store,
+                    namespace="test",
+                    deps=None,
+                    deps_type=type(None),
+                    model="test:model",
+                    model_id="test:model",
+                    cwd=tmp_path,
+                )
+            )
+            await _wait_for_output(output, "╭─ prompt")
+            pipe_input.send_text("/login\r")
+            await _wait_for_output(output, "No authentication providers are installed")
+            assert "yolop[tui,providers]" in output.text
+            pipe_input.send_text("/quit\r")
+            await asyncio.wait_for(running, timeout=1)
+
+
 async def test_new_command_switches_to_a_fresh_durable_session(tmp_path: Path) -> None:
     calls = 0
 

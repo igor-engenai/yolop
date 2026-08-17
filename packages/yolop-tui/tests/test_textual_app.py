@@ -1,6 +1,7 @@
 import asyncio
 from types import SimpleNamespace
 
+from pytest import raises
 from rich.text import Text
 from textual import events
 from textual.containers import VerticalScroll
@@ -187,6 +188,30 @@ async def test_textual_device_login_modal_shows_code_and_ctrl_c_cancels() -> Non
         await pilot.press("ctrl+c")
         assert await asyncio.wait_for(login, timeout=1) is None
         await asyncio.wait_for(cancelled.wait(), timeout=1)
+
+
+async def test_textual_device_login_failure_closes_modal() -> None:
+    class Provider:
+        name = "openai-codex"
+        label = "OpenAI Codex"
+
+        async def login(self, notify):
+            raise RuntimeError("provider-secret")
+
+        def status(self):
+            return SimpleNamespace(authenticated=False, expires_at=None)
+
+        def logout(self) -> bool:
+            return False
+
+    terminal = TextualTerminal(on_submit=lambda _text: None)
+
+    async with terminal.app.run_test(size=(80, 24)) as pilot:
+        with raises(RuntimeError, match="provider-secret"):
+            await terminal.login_auth_provider(Provider())
+        await pilot.pause()
+        assert terminal.app.screen.query_one("#editor", TextArea).has_focus
+        assert not terminal.app.screen.query("#auth-login")
 
 
 async def test_textual_confirmation_modal_accepts_and_cancels() -> None:

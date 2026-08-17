@@ -28,6 +28,7 @@ from yolop_session import (
 
 from yolop import Yolop
 
+from .auth import AuthProvider, load_auth_providers
 from .files import FileReferenceError, prepare_prompt
 from .rendering import Transcript
 from .selection import SelectionOption
@@ -36,6 +37,10 @@ from .textual_app import TextualTerminal
 _LOGGER = logging.getLogger(__name__)
 _SESSION_LOCK_TIMEOUT = 30.0
 _TERMINAL_FACTORY = TextualTerminal
+_AUTH_PROVIDER_LOADER = load_auth_providers
+_PROVIDER_INSTALL_HINT = (
+    'No authentication providers are installed. Install with `uv add "yolop[tui,providers]"`.'
+)
 _HELP_TEXT = (
     "Commands: /new  /resume  /login  /logout  /help  /quit\n"
     "Scroll: PageUp/PageDown or mouse wheel · End: newest output"
@@ -64,8 +69,10 @@ async def run_tui[DepsT](
     )
     ensure_session_pin(session, pin)
     transcript = Transcript.from_messages(session.messages)
+    auth_providers: tuple[AuthProvider, ...] | None = None
     submissions: asyncio.Queue[str] = asyncio.Queue()
     active_turn: _ActiveTurn | None = None
+    auth_state: str | None = None
     terminal: TextualTerminal
 
     def render_transcript() -> None:
@@ -73,7 +80,7 @@ async def run_tui[DepsT](
 
     def refresh_status() -> None:
         input_tokens, output_tokens = _session_usage(session.messages)
-        state = active_turn.state if active_turn is not None else "idle"
+        state = active_turn.state if active_turn is not None else (auth_state or "idle")
         queued = (
             f" · queued {active_turn.pending_count}"
             if active_turn is not None and active_turn.pending_count
@@ -127,7 +134,7 @@ async def run_tui[DepsT](
     refresh_status()
 
     async def control() -> None:
-        nonlocal session
+        nonlocal auth_providers, auth_state, session
         while True:
             text = await submissions.get()
             command = text.strip()
@@ -154,6 +161,78 @@ async def run_tui[DepsT](
                 continue
             if command == "/help":
                 transcript.add_notice(_HELP_TEXT)
+                render_transcript()
+                continue
+            if command in {"/login", "/logout"}:
+                if auth_providers is None:
+                    auth_providers = _AUTH_PROVIDER_LOADER()
+                if not auth_providers:
+                    transcript.add_error(_PROVIDER_INSTALL_HINT)
+                    render_transcript()
+                    continue
+            if command == "/login":
+                assert auth_providers is not None
+                selected = await terminal.choose_auth_provider(list(auth_providers))
+                if selected is None:
+                    continue
+                provider = next(
+                    provider for provider in auth_providers if provider.name == selected
+                )
+                auth_state = "logging in"
+                refresh_status()
+                try:
+                    status = await terminal.login_auth_provider(provider)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    _LOGGER.warning("Provider login failed for %s", provider.name)
+                    transcript.add_error(f"Login failed for {provider.name}")
+                else:
+                    if status is None:
+                        transcript.add_notice(f"Login cancelled for {provider.name}")
+                    else:
+                        transcript.add_notice(f"Logged in to {provider.name}")
+                finally:
+                    auth_state = None
+                    render_transcript()
+                    refresh_status()
+                continue
+            if command == "/logout":
+                assert auth_providers is not None
+                selected = await terminal.choose_auth_provider(
+                    list(auth_providers),
+                    action="Log out",
+                )
+                if selected is None:
+                    continue
+                provider = next(
+                    provider for provider in auth_providers if provider.name == selected
+                )
+                try:
+                    status = provider.status()
+                except Exception:
+                    _LOGGER.warning("Provider status failed for %s", provider.name)
+                    transcript.add_error(f"Could not read login status for {provider.name}")
+                    render_transcript()
+                    continue
+                if not status.authenticated:
+                    transcript.add_notice(f"Already logged out of {provider.name}")
+                    render_transcript()
+                    continue
+                if not await terminal.confirm(f"Log out of {provider.name}?"):
+                    continue
+                try:
+                    removed = provider.logout()
+                except Exception:
+                    _LOGGER.warning("Provider logout failed for %s", provider.name)
+                    transcript.add_error(f"Logout failed for {provider.name}")
+                else:
+                    message = (
+                        f"Logged out of {provider.name}"
+                        if removed
+                        else f"Already logged out of {provider.name}"
+                    )
+                    transcript.add_notice(message)
                 render_transcript()
                 continue
             if command.startswith("/"):
