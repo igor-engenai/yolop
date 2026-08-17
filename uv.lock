@@ -1167,6 +1167,7 @@ dependencies = [
 all = [
     { name = "pydantic-ai-slim", extra = ["openai"] },
     { name = "yolop-duckdb" },
+    { name = "yolop-providers" },
     { name = "yolop-session" },
     { name = "yolop-sqlite-session" },
     { name = "yolop-tui" },
@@ -1179,6 +1180,9 @@ duckdb = [
 ]
 openai = [
     { name = "pydantic-ai-slim", extra = ["openai"] },
+]
+providers = [
+    { name = "yolop-providers" },
 ]
 tui = [
     { name = "yolop-tui" },
@@ -1216,6 +1220,8 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "yolop-duckdb", marker = "extra == 'all'", editable = "packages/yolop-duckdb" },
     { name = "yolop-duckdb", marker = "extra == 'duckdb'", editable = "packages/yolop-duckdb" },
+    { name = "yolop-providers", marker = "extra == 'all'", editable = "packages/yolop-providers" },
+    { name = "yolop-providers", marker = "extra == 'providers'", editable = "packages/yolop-providers" },
     { name = "yolop-session", marker = "extra == 'all'", editable = "packages/yolop-session" },
     { name = "yolop-sqlite-session", marker = "extra == 'all'", editable = "packages/yolop-sqlite-session" },
     { name = "yolop-tui", marker = "extra == 'all'", editable = "packages/yolop-tui" },
@@ -1226,7 +1232,7 @@ requires-dist = [
     { name = "yolop-workspace", marker = "extra == 'workspace'", editable = "packages/yolop-workspace" },
     { name = "yolop-workspace-session", marker = "extra == 'all'", editable = "packages/yolop-workspace-session" },
 ]
-provides-extras = ["workspace", "duckdb", "web", "tui", "openai", "all"]
+provides-extras = ["workspace", "duckdb", "web", "tui", "openai", "providers", "all"]
 
 [package.metadata.requires-dev]
 dev = [

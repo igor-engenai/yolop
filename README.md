@@ -23,8 +23,10 @@ You can install smaller feature sets instead:
 - `uv add "yolop[workspace]"` installs the Workspace capability.
 - `uv add "yolop[duckdb]"` installs the DuckDB capability.
 - `uv add "yolop[web]"` installs the web host and its runtime persistence.
-- `uv add "yolop[tui,openai]"` installs the terminal host and OpenAI model support.
-- `uv add "yolop[openai]"` installs OpenAI model support.
+- `uv add "yolop[tui,openai]"` installs the terminal host and OpenAI API support.
+- `uv add "yolop[tui,providers]"` installs the terminal host and optional YoloP providers.
+- `uv add "yolop[openai]"` installs OpenAI API support.
+- `uv add "yolop[providers]"` installs the `yolop-providers` package, including Codex subscription support.
 
 The feature packages remain separate Python distributions. A package index must contain compatible `0.1.x` releases of each selected YoloP distribution. For development in this repository, use `uv sync --all-packages`.
 
@@ -86,9 +88,37 @@ While a run streams, Enter sends a native `asap` steering message. Escape cancel
 
 New streamed output follows automatically while the managed transcript is at the bottom. Scrolling up pauses that following until PageDown, mouse-down scrolling, or End reaches the bottom. Completed tool and thinking entries remain reconstructable, so Ctrl+O and Ctrl+T can update old entries. Mouse mode is active while the TUI runs; use the terminal's modifier key, usually Shift, for native text selection.
 
-The only built-in commands are `/new`, `/resume`, `/help`, and `/quit`. Type `@` to fuzzy-complete project files. Use `@path` or `@"path with spaces"` for an attachment. Quotes, apostrophes, and backticks elsewhere remain ordinary prompt text and are not parsed as shell syntax. Text attachments must stay inside the project, use UTF-8, contain no null bytes, remain below 256 KiB each, and remain below 1 MiB in total.
+The built-in commands are `/new`, `/resume`, `/login`, `/logout`, `/help`, and `/quit`. `/login` and `/logout` discover installed authentication providers. Type `@` to fuzzy-complete project files. Use `@path` or `@"path with spaces"` for an attachment. Quotes, apostrophes, and backticks elsewhere remain ordinary prompt text and are not parsed as shell syntax. Text attachments must stay inside the project, use UTF-8, contain no null bytes, remain below 256 KiB each, and remain below 1 MiB in total.
 
 V1 does not include model switching, direct shell mode, images, an external editor, branching, remote-server mode, custom themes, custom keybindings, TUI extensions, or a native Windows support promise.
+
+## Use a ChatGPT Codex subscription
+
+Install the TUI and provider package:
+
+```bash
+uv add "yolop[tui,providers]"
+```
+
+Start the Codex coding example:
+
+```bash
+uv run yolop --agent-spec examples/agents/codex.yaml
+```
+
+Run `/login`, select **OpenAI Codex (ChatGPT Plus/Pro)**, open the displayed device URL, and enter the displayed code. Ctrl+C or Cancel stops login polling without changing credentials. After login, submit a prompt to perform the manual live smoke test. The example uses `openai-codex:gpt-5.6-luna` with high thinking and Workspace. Model names are passed through to Codex; account and plan availability remain server policy. The bundled default AgentSpec remains `openai:gpt-5.6-luna` and uses the normal OpenAI API.
+
+Authentication is also available without the TUI:
+
+```bash
+uv run yolop-providers login openai-codex
+uv run yolop-providers status openai-codex
+uv run yolop-providers logout openai-codex
+```
+
+YoloP stores OAuth access and refresh tokens in `$XDG_CONFIG_HOME/yolop/auth.json`, or `~/.config/yolop/auth.json` when `XDG_CONFIG_HOME` is unset. The directory uses mode `0700`; the atomically replaced credential file uses mode `0600`. Expiring access tokens refresh automatically under a cross-process lock. Tokens are never part of AgentSpec or session history.
+
+Codex OAuth v1 is for local, single-user hosts. Do not use this file-backed credential provider as multi-tenant web authentication or expose one user's ChatGPT subscription through a shared service.
 
 ## Use workspace sessions
 
@@ -211,6 +241,10 @@ YoloP returns Pydantic AI's native `AgentRunEvents` handle. It does not wrap eve
 
 The core package contains the stateless runtime, AgentSpec capability discovery, the generic Skills capability, and bundled default skills. It does not contain agent-specific AgentSpecs, Workspace code, DuckDB, persistence, FastAPI, model providers, or `pydantic-ai-harness`.
 
+### `yolop-providers`
+
+[`packages/yolop-providers`](packages/yolop-providers) is the optional model-provider distribution. It registers `openai-codex:<model>` through `yolop.model_providers`, adapts ChatGPT subscription OAuth to Pydantic AI's native `OpenAIResponsesModel`, owns device-code login and automatic refresh, and exposes the standalone `yolop-providers` credential command. It does not own the agent loop, messages, tools, streaming events, or session persistence.
+
 ### `yolop-session`
 
 [`packages/yolop-session`](packages/yolop-session) defines one storage-independent `RuntimeStore` protocol. It owns namespaced session and run values, execution pins, durable event values, stable errors, and generated identity helpers.
@@ -243,6 +277,6 @@ The core package contains the stateless runtime, AgentSpec capability discovery,
 
 AgentSpec contains declarative agent data: instructions, prompts, model configuration, capability names and arguments, bundled skills, and immutable inline custom skills.
 
-Capability implementations and tools are installed Python code. YoloP resolves custom capability names through the `yolop.capabilities` entry-point group and imports only selected providers.
+Capability implementations and tools are installed Python code. YoloP resolves custom capability names through the `yolop.capabilities` entry-point group. It resolves optional provider-qualified model strings through `yolop.model_providers`. The TUI discovers local authentication flows through `yolop.auth_providers`. Only selected model and capability providers are imported during execution.
 
 Changing prompts, inline skills, or capability arguments creates a new AgentSpec and needs no code release. Existing sessions keep their immutable AgentSpec digest and model pin. A host must create a new session or implement an explicit upgrade operation to change either pin.

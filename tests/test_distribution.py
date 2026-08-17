@@ -8,6 +8,7 @@ def test_distribution_publishes_install_profiles() -> None:
         "all",
         "duckdb",
         "openai",
+        "providers",
         "tui",
         "web",
         "workspace",
@@ -17,12 +18,14 @@ def test_distribution_publishes_install_profiles() -> None:
     expected_profile_dependencies = {
         "duckdb": {"yolop-duckdb"},
         "openai": {"pydantic-ai-slim[openai]"},
+        "providers": {"yolop-providers"},
         "tui": {"yolop-tui"},
         "web": {"yolop-webserver"},
         "workspace": {"yolop-workspace"},
         "all": {
             "pydantic-ai-slim[openai]",
             "yolop-duckdb",
+            "yolop-providers",
             "yolop-session",
             "yolop-sqlite-session",
             "yolop-tui",

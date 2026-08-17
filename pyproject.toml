@@ -19,9 +19,11 @@ duckdb = ["yolop-duckdb>=0.1.0,<0.2.0"]
 web = ["yolop-webserver>=0.1.0,<0.2.0"]
 tui = ["yolop-tui>=0.1.0,<0.2.0"]
 openai = ["pydantic-ai-slim[openai]>=2.31.0"]
+providers = ["yolop-providers>=0.1.0,<0.2.0"]
 all = [
     "pydantic-ai-slim[openai]>=2.31.0",
     "yolop-duckdb>=0.1.0,<0.2.0",
+    "yolop-providers>=0.1.0,<0.2.0",
     "yolop-session>=0.1.0,<0.2.0",
     "yolop-sqlite-session>=0.1.0,<0.2.0",
     "yolop-tui>=0.1.0,<0.2.0",
