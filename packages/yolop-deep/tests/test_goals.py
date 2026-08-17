@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from pydantic_ai import AgentSpec
@@ -89,6 +90,49 @@ async def test_impossible_goal_stops_with_reason(tmp_path: Path) -> None:
     assert record.status is GoalStatus.IMPOSSIBLE
     assert record.reason == "service is offline"
     assert len(await runtime.list_runs("tenant", session_id=session.id)) == 2
+
+
+async def test_root_deadline_stops_goal_continuation(tmp_path: Path) -> None:
+    current = datetime.now(UTC)
+    deadline = current + timedelta(seconds=10)
+
+    class Clock:
+        value = current
+
+        def __call__(self) -> datetime:
+            return self.value
+
+    clock = Clock()
+
+    async def work(_messages: list[ModelMessage], _info: AgentInfo) -> AsyncIterator[str]:
+        clock.value = deadline + timedelta(seconds=1)
+        yield "attempted"
+
+    store = SQLiteRuntimeStore(tmp_path / "runtime.db")
+    runtime = Runtime(store=store, clock=clock)
+    work_spec = AgentSpec(model="test:model")
+    evaluator_spec = AgentSpec(model="test:evaluator", instructions="Return a verdict.")
+    session = await runtime.create_session("tenant", spec=work_spec, model_id="test:model")
+
+    record = await GoalRunner(runtime).start(
+        "tenant",
+        session.id,
+        goal="Meet the deadline.",
+        spec=work_spec,
+        model=FunctionModel(stream_function=work),
+        model_id="test:model",
+        evaluator_spec=evaluator_spec,
+        evaluator_model=TestModel(custom_output_args={"verdict": "unmet", "reason": "not done"}),
+        evaluator_model_id="test:evaluator",
+        deps=None,
+        deps_type=type(None),
+        budget=RuntimeBudget(wall_deadline=deadline, request_limit=10),
+        max_turns=3,
+    )
+
+    assert record.status is GoalStatus.EXHAUSTED
+    assert "RuntimeDeadlineExceededError" in record.reason
+    assert len(await runtime.list_runs("tenant", session_id=session.id)) == 1
 
 
 async def test_root_budget_stops_goal_continuation(tmp_path: Path) -> None:
