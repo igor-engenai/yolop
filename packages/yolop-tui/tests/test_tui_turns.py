@@ -31,10 +31,13 @@ from pydantic_ai.models.function import (
 from pydantic_ai.toolsets.function import FunctionToolset
 from pytest import MonkeyPatch, fixture, mark, raises
 from rich.console import Console, RenderableType
+from yolop_context import Compaction
 from yolop_runtime import ExecutionPin, SessionPinMismatchError
 from yolop_sqlite_session import SQLiteRuntimeStore
 from yolop_tui import run_tui
 from yolop_tui.selection import SelectionOption
+
+from yolop import ProviderCatalog
 
 
 class CapturingOutput:
@@ -799,9 +802,54 @@ async def test_help_lists_only_the_minimal_commands(tmp_path: Path) -> None:
             pipe_input.send_text("/help\r")
             await _wait_for_output(
                 output,
-                "Commands: /new  /resume  /login  /logout  /help  /quit",
+                "Commands: /new  /resume  /compact [focus]  /login  /logout  /help  /quit",
             )
             await _wait_for_output(output, "Scroll: PageUp/PageDown or mouse wheel")
+            pipe_input.send_text("/quit\r")
+            await asyncio.wait_for(running, timeout=1)
+
+
+async def test_compact_command_uses_the_selected_runtime_capability(tmp_path: Path) -> None:
+    class EntryPoint:
+        name = "Compaction"
+        value = "yolop_context:Compaction"
+        dist = None
+
+        @staticmethod
+        def load() -> type[Compaction]:
+            return Compaction
+
+    async def respond(
+        _messages: list[ModelMessage],
+        _info: AgentInfo,
+    ) -> AsyncIterator[str]:
+        yield "unexpected"
+
+    spec = AgentSpec(
+        model="test:model",
+        capabilities=[{"Compaction": {"target_tokens": 1, "include_summarizer": False}}],
+    )
+    output = CapturingOutput()
+    store = SQLiteRuntimeStore(tmp_path / "runtime.db")
+    catalog = ProviderCatalog.from_entry_points(capability_entry_points=[EntryPoint()])
+    with create_pipe_input() as pipe_input:
+        with create_app_session(input=pipe_input, output=output):
+            running = asyncio.create_task(
+                run_tui(
+                    spec,
+                    store=store,
+                    namespace="test",
+                    deps=None,
+                    deps_type=type(None),
+                    model=FunctionModel(stream_function=respond),
+                    model_id="test:model",
+                    provider_catalog=catalog,
+                    cwd=tmp_path,
+                )
+            )
+            await _wait_for_output(output, "╭─ prompt")
+            pipe_input.send_text("/compact keep {braces}\r")
+            await _wait_for_output(output, "Session context compacted")
             pipe_input.send_text("/quit\r")
             await asyncio.wait_for(running, timeout=1)
 
