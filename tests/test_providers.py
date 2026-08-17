@@ -1,16 +1,39 @@
 from collections.abc import AsyncIterator
-from importlib import metadata
 from types import SimpleNamespace
 
 from pydantic_ai import AgentRunResultEvent, AgentSpec
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.models.function import AgentInfo, FunctionModel
-from pytest import MonkeyPatch, raises
+from pytest import raises
 
-from yolop import Yolop
+from yolop import ProviderCatalog, Yolop
 
 
-async def test_agent_spec_resolves_an_installed_model_provider(monkeypatch: MonkeyPatch) -> None:
+def test_unallowlisted_model_provider_is_rejected_without_loading_it() -> None:
+    loaded: list[str] = []
+
+    def load_forbidden():
+        loaded.append("forbidden")
+        return lambda _model_name: object()
+
+    entry_point = SimpleNamespace(name="forbidden", load=load_forbidden)
+    catalog = ProviderCatalog.from_entry_points(
+        model_provider_entry_points=(entry_point,),
+        allowed_model_providers=(),
+    )
+
+    with raises(ValueError, match="Model provider 'forbidden' is not in provider catalog"):
+        Yolop(provider_catalog=catalog).run(
+            AgentSpec(model="forbidden:model"),
+            "Must fail before loading",
+            deps=None,
+            deps_type=type(None),
+        )
+
+    assert loaded == []
+
+
+async def test_agent_spec_resolves_an_installed_model_provider() -> None:
     resolved: list[str] = []
 
     async def respond(
@@ -28,9 +51,9 @@ async def test_agent_spec_resolves_an_installed_model_provider(monkeypatch: Monk
         value="tests.test_providers:resolve",
         load=lambda: resolve,
     )
-    monkeypatch.setattr(metadata, "entry_points", lambda **_kwargs: (entry_point,))
+    catalog = ProviderCatalog.from_entry_points(model_provider_entry_points=(entry_point,))
 
-    async with Yolop().run(
+    async with Yolop(provider_catalog=catalog).run(
         AgentSpec(model="example:model-a"),
         "Use the selected provider",
         deps=None,
@@ -43,9 +66,7 @@ async def test_agent_spec_resolves_an_installed_model_provider(monkeypatch: Monk
     assert resolved == ["model-a"]
 
 
-async def test_explicit_model_reference_resolves_an_installed_provider(
-    monkeypatch: MonkeyPatch,
-) -> None:
+async def test_explicit_model_reference_resolves_an_installed_provider() -> None:
     resolved: list[str] = []
 
     async def respond(
@@ -59,9 +80,9 @@ async def test_explicit_model_reference_resolves_an_installed_provider(
         return FunctionModel(stream_function=respond)
 
     entry_point = SimpleNamespace(name="example", load=lambda: resolve)
-    monkeypatch.setattr(metadata, "entry_points", lambda **_kwargs: (entry_point,))
+    catalog = ProviderCatalog.from_entry_points(model_provider_entry_points=(entry_point,))
 
-    async with Yolop().run(
+    async with Yolop(provider_catalog=catalog).run(
         AgentSpec(model="native:unused"),
         "Use the override",
         model="example:override",
@@ -77,7 +98,7 @@ async def test_explicit_model_reference_resolves_an_installed_provider(
 
 
 async def test_native_pydantic_model_reference_remains_native() -> None:
-    async with Yolop().run(
+    async with Yolop(provider_catalog=ProviderCatalog()).run(
         AgentSpec(model="test"),
         "Use Pydantic AI directly",
         deps=None,
@@ -88,12 +109,12 @@ async def test_native_pydantic_model_reference_remains_native() -> None:
     assert isinstance(events[-1], AgentRunResultEvent)
 
 
-def test_model_provider_requires_a_model_name(monkeypatch: MonkeyPatch) -> None:
+def test_model_provider_requires_a_model_name() -> None:
     entry_point = SimpleNamespace(name="example", load=lambda: lambda _name: None)
-    monkeypatch.setattr(metadata, "entry_points", lambda **_kwargs: (entry_point,))
+    catalog = ProviderCatalog.from_entry_points(model_provider_entry_points=(entry_point,))
 
     with raises(ValueError, match="Model provider 'example' requires a model name"):
-        Yolop().run(
+        Yolop(provider_catalog=catalog).run(
             AgentSpec(model="example:"),
             "Invalid model",
             deps=None,
@@ -101,41 +122,29 @@ def test_model_provider_requires_a_model_name(monkeypatch: MonkeyPatch) -> None:
         )
 
 
-def test_duplicate_model_provider_resolvers_are_rejected(monkeypatch: MonkeyPatch) -> None:
+def test_duplicate_model_provider_resolvers_are_rejected() -> None:
     entry_points = (
-        SimpleNamespace(name="example", load=lambda: lambda _name: None),
-        SimpleNamespace(name="example", load=lambda: lambda _name: None),
+        SimpleNamespace(name="example", value="first:resolve", load=lambda: lambda _name: None),
+        SimpleNamespace(name="example", value="second:resolve", load=lambda: lambda _name: None),
     )
-    monkeypatch.setattr(metadata, "entry_points", lambda **_kwargs: entry_points)
 
-    with raises(ValueError, match="Model provider 'example' has multiple installed resolvers"):
-        Yolop().run(
-            AgentSpec(model="example:model"),
-            "Ambiguous model",
-            deps=None,
-            deps_type=type(None),
-        )
+    with raises(ValueError, match="Model provider 'example' has multiple owners"):
+        ProviderCatalog.from_entry_points(model_provider_entry_points=entry_points)
 
 
-def test_model_provider_must_load_a_callable(monkeypatch: MonkeyPatch) -> None:
+def test_model_provider_must_load_a_callable() -> None:
     entry_point = SimpleNamespace(name="example", load=lambda: object())
-    monkeypatch.setattr(metadata, "entry_points", lambda **_kwargs: (entry_point,))
 
     with raises(TypeError, match="Model provider 'example' did not load a callable resolver"):
-        Yolop().run(
-            AgentSpec(model="example:model"),
-            "Invalid provider",
-            deps=None,
-            deps_type=type(None),
-        )
+        ProviderCatalog.from_entry_points(model_provider_entry_points=(entry_point,))
 
 
-def test_model_provider_must_resolve_a_native_model(monkeypatch: MonkeyPatch) -> None:
+def test_model_provider_must_resolve_a_native_model() -> None:
     entry_point = SimpleNamespace(name="example", load=lambda: lambda _name: object())
-    monkeypatch.setattr(metadata, "entry_points", lambda **_kwargs: (entry_point,))
+    catalog = ProviderCatalog.from_entry_points(model_provider_entry_points=(entry_point,))
 
     with raises(TypeError, match="Model provider 'example' did not resolve a Pydantic AI Model"):
-        Yolop().run(
+        Yolop(provider_catalog=catalog).run(
             AgentSpec(model="example:model"),
             "Invalid model",
             deps=None,

@@ -40,7 +40,7 @@ from yolop_session import (
     validate_namespace,
 )
 
-from yolop import Yolop
+from yolop import ProviderCatalog, Yolop
 
 _LOGGER = logging.getLogger(__name__)
 _STREAM_EVENT_ADAPTER = TypeAdapter(AgentStreamEvent)
@@ -198,9 +198,11 @@ def create_app[DepsT](
     model: Model | KnownModelName | str | None = None,
     model_id: str | None = None,
     limits: RunLimits | None = None,
+    provider_catalog: ProviderCatalog | None = None,
 ) -> FastAPI:
     """Create a FastAPI application for one host-selected AgentSpec."""
-    runtime = Yolop()
+    runtime = Yolop(provider_catalog=provider_catalog)
+    runtime.provider_catalog.validate_spec(agent_spec)
     pin = _execution_pin(agent_spec, model=model, model_id=model_id)
     configured_limits = limits or RunLimits()
 

@@ -56,7 +56,7 @@ def test_distribution_publishes_current_entry_points() -> None:
 
 def test_public_package_imports_load() -> None:
     public_imports = {
-        "yolop": ("Yolop",),
+        "yolop": ("ProviderCatalog", "ProviderManifest", "Yolop"),
         "yolop_duckdb": ("DuckDB", "DuckDBDeps"),
         "yolop_providers": ("CodexOAuth", "create_codex_model"),
         "yolop_session": ("RuntimeStore", "RuntimeSessionSnapshot"),

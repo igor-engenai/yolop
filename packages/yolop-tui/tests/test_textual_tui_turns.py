@@ -195,11 +195,13 @@ async def test_textual_login_selects_provider_and_runs_its_model(
 
     monkeypatch.setattr(tui_app, "_TERMINAL_FACTORY", terminal_factory)
     monkeypatch.setattr(tui_app, "_AUTH_PROVIDER_LOADER", lambda: (Provider(),))
-    monkeypatch.setattr(
-        metadata,
-        "entry_points",
-        lambda **_kwargs: (SimpleNamespace(name="openai-codex", load=lambda: resolve),),
-    )
+
+    def entry_points(*, group: str, **_kwargs):
+        if group == "yolop.model_providers":
+            return (SimpleNamespace(name="openai-codex", load=lambda: resolve),)
+        return ()
+
+    monkeypatch.setattr(metadata, "entry_points", entry_points)
     store = SQLiteRuntimeStore(tmp_path / "runtime.db")
 
     await run_tui(

@@ -26,7 +26,7 @@ from yolop_session import (
     ensure_session_pin,
 )
 
-from yolop import Yolop
+from yolop import ProviderCatalog, Yolop
 
 from .auth import AuthProvider, load_auth_providers
 from .files import FileReferenceError, prepare_prompt
@@ -58,8 +58,11 @@ async def run_tui[DepsT](
     model_id: str | None = None,
     session_id: str | None = None,
     cwd: Path | None = None,
+    provider_catalog: ProviderCatalog | None = None,
 ) -> None:
     """Run the full-screen Textual host until the user exits."""
+    runtime = Yolop(provider_catalog=provider_catalog)
+    runtime.provider_catalog.validate_spec(spec)
     working_directory = (cwd or Path.cwd()).expanduser().resolve()
     pin = _execution_pin(spec, model=model, model_id=model_id)
     session = (
@@ -249,6 +252,7 @@ async def run_tui[DepsT](
             render_transcript()
             try:
                 session = await _run_turn(
+                    runtime,
                     spec,
                     prompt=prompt,
                     session=session,
@@ -298,6 +302,7 @@ async def run_tui[DepsT](
 
 
 async def _run_turn[DepsT](
+    runtime: Yolop,
     spec: AgentSpec,
     *,
     prompt: str | list[UserContent],
@@ -349,7 +354,7 @@ async def _run_turn[DepsT](
                         elif transcript.apply(event):
                             render_transcript()
 
-                result = await Yolop().execute(
+                result = await runtime.execute(
                     spec,
                     prompt,
                     event_stream_handler=handle_events,

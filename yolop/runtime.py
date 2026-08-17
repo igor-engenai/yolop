@@ -8,11 +8,17 @@ from pydantic_ai.messages import ModelMessage, UserContent
 from pydantic_ai.models import KnownModelName, Model
 
 from .capabilities import load_capability_types
+from .catalog import ProviderCatalog
 from .providers import resolve_model_reference
 
 
 class Yolop:
     """Construct and run a fresh Pydantic AI Agent for each invocation."""
+
+    def __init__(self, provider_catalog: ProviderCatalog | None = None) -> None:
+        self.provider_catalog = (
+            ProviderCatalog.from_installed() if provider_catalog is None else provider_catalog
+        )
 
     async def execute[DepsT](
         self,
@@ -26,8 +32,8 @@ class Yolop:
         message_history: Sequence[ModelMessage] | None = None,
     ) -> AgentRunResult[Any]:
         """Run to completion with a native handler that can steer through RunContext."""
-        capability_types = load_capability_types(spec)
-        resolved_model = _resolve_model(spec, model)
+        capability_types = load_capability_types(spec, catalog=self.provider_catalog)
+        resolved_model = _resolve_model(spec, model, catalog=self.provider_catalog)
         agent = Agent.from_spec(
             spec,
             deps_type=deps_type,
@@ -51,8 +57,8 @@ class Yolop:
         model: Model | KnownModelName | str | None = None,
         message_history: Sequence[ModelMessage] | None = None,
     ) -> AbstractAsyncContextManager[AgentRunEvents[Any]]:
-        capability_types = load_capability_types(spec)
-        resolved_model = _resolve_model(spec, model)
+        capability_types = load_capability_types(spec, catalog=self.provider_catalog)
+        resolved_model = _resolve_model(spec, model, catalog=self.provider_catalog)
         agent = Agent.from_spec(
             spec,
             deps_type=deps_type,
@@ -65,12 +71,14 @@ class Yolop:
 def _resolve_model(
     spec: AgentSpec | dict[str, Any],
     model: Model | KnownModelName | str | None,
+    *,
+    catalog: ProviderCatalog,
 ) -> Model | KnownModelName | str | None:
     if isinstance(model, str):
-        return resolve_model_reference(model)
+        return resolve_model_reference(model, catalog=catalog)
     if model is not None:
         return model
     validated_spec = spec if isinstance(spec, AgentSpec) else AgentSpec.model_validate(spec)
     if isinstance(validated_spec.model, str):
-        return resolve_model_reference(validated_spec.model)
+        return resolve_model_reference(validated_spec.model, catalog=catalog)
     return None
