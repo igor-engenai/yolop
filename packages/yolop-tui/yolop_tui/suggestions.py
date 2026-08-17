@@ -4,7 +4,20 @@ from pathlib import Path
 
 from .files import _project_files
 
-_COMMANDS = ("/new", "/resume", "/login", "/logout", "/help", "/quit")
+_COMMANDS = (
+    "/new",
+    "/resume",
+    "/history",
+    "/compact",
+    "/goal",
+    "/goal-status",
+    "/goal-stop",
+    "/goal-resume",
+    "/login",
+    "/logout",
+    "/help",
+    "/quit",
+)
 
 
 @dataclass(frozen=True)
