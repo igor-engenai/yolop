@@ -281,6 +281,8 @@ The core package contains the stateless runtime, AgentSpec capability discovery,
 
 [`packages/yolop-context`](packages/yolop-context) is an optional capability plugin for safe Pydantic AI Harness context adapters. It resolves a host-provided overflow store per durable Session, exposes the YoloP Run ID to Harness compaction receipts, warns near configured limits, detects stuck tool loops, provides active-history compaction, and rejects runtime objects or secret-bearing AgentSpec arguments. It never changes the canonical transcript.
 
+It also provides `ProjectContextRegistry`. Hosts map safe logical aliases to bounded files under a trusted project root. AgentSpec metadata selects aliases only; the host rejects traversal, symlinks, sensitive files, binary data, and excessive payloads before injecting marked, redacted context instructions.
+
 ### `yolop-duckdb`
 
 [`packages/yolop-duckdb`](packages/yolop-duckdb) is a separate capability plugin. It owns the DuckDB dependency, resolves a host-provided read-only connection, and exposes the bounded `query_duckdb` model tool.

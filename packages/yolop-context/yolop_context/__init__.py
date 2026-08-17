@@ -40,6 +40,19 @@ from pydantic_ai_harness.tool_output_limits import (
 )
 from pydantic_core import to_json
 
+from .project_context import (
+    ProjectContext,
+    ProjectContextComposition,
+    ProjectContextContentError,
+    ProjectContextError,
+    ProjectContextFile,
+    ProjectContextForbiddenFileError,
+    ProjectContextLimitError,
+    ProjectContextPathError,
+    ProjectContextRegistry,
+    ProjectContextUnknownFileError,
+)
+
 
 class ContextConfigurationError(ValueError):
     """The serialized Context capability configuration is not safe or supported."""
@@ -764,6 +777,16 @@ __all__ = [
     "ContextResourceError",
     "ContextScope",
     "OutputBand",
+    "ProjectContext",
+    "ProjectContextComposition",
+    "ProjectContextContentError",
+    "ProjectContextError",
+    "ProjectContextFile",
+    "ProjectContextForbiddenFileError",
+    "ProjectContextLimitError",
+    "ProjectContextPathError",
+    "ProjectContextRegistry",
+    "ProjectContextUnknownFileError",
     "ScopedOverflowStore",
     "ToolOutputLimits",
     "TranscriptHandle",
