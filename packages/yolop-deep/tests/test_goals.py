@@ -111,9 +111,7 @@ async def test_goals_are_isolated_by_session_and_namespace(tmp_path: Path) -> No
             model=TestModel(custom_output_text="attempted"),
             model_id="test:model",
             evaluator_spec=evaluator_spec,
-            evaluator_model=TestModel(
-                custom_output_args={"verdict": "met", "reason": "done"}
-            ),
+            evaluator_model=TestModel(custom_output_args={"verdict": "met", "reason": "done"}),
             evaluator_model_id="test:evaluator",
             deps=None,
             deps_type=type(None),
