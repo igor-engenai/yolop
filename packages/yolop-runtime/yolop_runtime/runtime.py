@@ -38,6 +38,7 @@ from . import (
     RuntimeStore,
     ScopedStateContext,
     SessionLockTimeoutError,
+    canonical_turn_messages,
     ensure_session_pin,
 )
 
@@ -359,7 +360,10 @@ class Runtime[HostDepsT]:
                     claimed.id,
                     owner_id=owner_id,
                     expected_session_revision=current.revision,
-                    full_messages=[*base_full_messages, *result.new_messages()],
+                    full_messages=[
+                        *base_full_messages,
+                        *canonical_turn_messages(result.new_messages(), prompt),
+                    ],
                     active_messages=result.all_messages(),
                     output=result.output,
                     usage=result.usage,

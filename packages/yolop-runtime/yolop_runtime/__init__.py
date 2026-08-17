@@ -9,7 +9,7 @@ from typing import Any, Protocol, TypeVar
 from uuid import UUID, uuid4
 
 from pydantic_ai import AgentSpec, AgentStreamEvent
-from pydantic_ai.messages import ModelMessage
+from pydantic_ai.messages import ModelMessage, ModelRequest, UserContent, UserPromptPart
 from pydantic_ai.usage import RunUsage
 
 
@@ -699,6 +699,29 @@ def new_session_id() -> str:
     return str(uuid4())
 
 
+def canonical_turn_messages(
+    messages: Sequence[ModelMessage],
+    prompt: str | Sequence[UserContent] | None,
+) -> list[ModelMessage]:
+    """Return only the current turn from a possibly rewritten active result.
+
+    Compaction capabilities may rewrite prior active messages before Pydantic AI returns its
+    result. The current user prompt is the durable boundary between that projection and the
+    native messages produced by this Run.
+    """
+    if prompt is None:
+        return list(messages)
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if not isinstance(message, ModelRequest):
+            continue
+        if any(
+            isinstance(part, UserPromptPart) and part.content == prompt for part in message.parts
+        ):
+            return list(messages[index:])
+    return list(messages)
+
+
 def input_digest(prompt: str) -> str:
     """Return a stable digest for persisted Run input."""
     return sha256(prompt.encode()).hexdigest()
@@ -767,6 +790,7 @@ __all__ = [
     "decode_state_payload",
     "encode_state_payload",
     "agent_spec_digest",
+    "canonical_turn_messages",
     "ensure_session_pin",
     "input_digest",
     "new_session_id",

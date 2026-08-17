@@ -13,6 +13,7 @@ dependencies = [
 ]
 
 [project.entry-points."yolop.capabilities"]
+Compaction = "yolop_context:Compaction"
 Context = "yolop_context:Context"
 StuckLoop = "yolop_context:StuckLoop"
 ToolOutputLimits = "yolop_context:ToolOutputLimits"

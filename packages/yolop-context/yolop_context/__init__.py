@@ -11,8 +11,13 @@ from typing import Any, Literal, Protocol, runtime_checkable
 
 from pydantic_ai.capabilities import AbstractCapability, CombinedCapability
 from pydantic_ai.exceptions import ModelRetry, UserError
+from pydantic_ai.models import Model
 from pydantic_ai.tools import RunContext
 from pydantic_ai_harness.compaction import (
+    ClearToolResults,
+    DeduplicateFileReads,
+    SummarizingCompaction,
+    TieredCompaction,
     TranscriptHandleProvider,
 )
 from pydantic_ai_harness.compaction import (
@@ -76,6 +81,17 @@ class ContextDeps(Protocol):
 
     @property
     def artifact_registry(self) -> ArtifactRegistry | None: ...
+
+
+@runtime_checkable
+class CompactionDeps(Protocol):
+    """Optional host-selected resources for active-history compaction."""
+
+    @property
+    def scope(self) -> ContextScope: ...
+
+    @property
+    def summarizer_model(self) -> Model | str | None: ...
 
 
 @runtime_checkable
@@ -431,6 +447,94 @@ class ToolOutputLimits(AbstractCapability[Any]):
 
 
 @dataclass
+class Compaction(AbstractCapability[Any]):
+    """Build cheap-to-expensive Harness compaction tiers from safe policy data."""
+
+    target_tokens: int = 10_000
+    keep_tool_pairs: int = 3
+    file_tools: Sequence[str] = ()
+    include_summarizer: bool = True
+    summarizer_keep_messages: int = 20
+    receipts: bool = True
+    incremental: bool = True
+    bridge_prefix: bool = False
+
+    def __post_init__(self) -> None:
+        for name in ("target_tokens", "keep_tool_pairs", "summarizer_keep_messages"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ContextConfigurationError(f"Compaction.{name} must be non-negative")
+        if self.target_tokens < 1:
+            raise ContextConfigurationError("Compaction.target_tokens must be positive")
+        if not isinstance(self.file_tools, (list, tuple)) or not all(
+            isinstance(name, str) and name for name in self.file_tools
+        ):
+            raise ContextConfigurationError("Compaction.file_tools must contain tool names")
+        if not all(
+            isinstance(value, bool)
+            for value in (
+                self.include_summarizer,
+                self.receipts,
+                self.incremental,
+                self.bridge_prefix,
+            )
+        ):
+            raise ContextConfigurationError("Compaction flags must be booleans")
+        self.file_tools = tuple(self.file_tools)
+
+    @classmethod
+    def from_spec(cls, *args: Any, **kwargs: Any) -> Compaction:
+        if args or not _is_serialized_value(kwargs):
+            raise ContextConfigurationError(
+                "Compaction accepts serialized capability arguments only"
+            )
+        supported = {
+            "target_tokens",
+            "keep_tool_pairs",
+            "file_tools",
+            "include_summarizer",
+            "summarizer_keep_messages",
+            "receipts",
+            "incremental",
+            "bridge_prefix",
+        }
+        unknown = sorted(set(kwargs) - supported)
+        if unknown:
+            raise ContextConfigurationError(
+                f"Compaction arguments are unsupported: {', '.join(unknown)}"
+            )
+        return cls(**kwargs)
+
+    async def for_run(self, ctx: RunContext[Any]) -> AbstractCapability[Any]:
+        tiers: list[Any] = [
+            ClearToolResults(max_tokens=1, keep_pairs=self.keep_tool_pairs),
+        ]
+        if self.file_tools:
+            tiers.append(
+                DeduplicateFileReads(
+                    file_key=_file_key_for(self.file_tools),
+                )
+            )
+        if self.include_summarizer:
+            summarizer_model = getattr(ctx.deps, "summarizer_model", None)
+            tiers.append(
+                SummarizingCompaction(
+                    model=summarizer_model,
+                    max_messages=1,
+                    keep_messages=self.summarizer_keep_messages,
+                    receipts=self.receipts,
+                    incremental=self.incremental,
+                    bridge_prefix=self.bridge_prefix,
+                )
+            )
+        tiered = TieredCompaction(tiers=tiers, target_tokens=self.target_tokens)
+        scope = getattr(ctx.deps, "scope", None)
+        if isinstance(scope, ContextScope):
+            return CombinedCapability([tiered, TranscriptHandle(handle=scope.run_id)])
+        return tiered
+
+
+@dataclass
 class Context(AbstractCapability[Any]):
     """Bind safe Harness context helpers to host-scoped YoloP resources."""
 
@@ -472,6 +576,22 @@ class Context(AbstractCapability[Any]):
         ).for_run(ctx)
         scope = _scope(ctx.deps)
         return CombinedCapability([output, TranscriptHandle(handle=scope.run_id)])
+
+
+def _file_key_for(tool_names: Sequence[str]) -> Any:
+    allowed = frozenset(tool_names)
+
+    def file_key(call: Any) -> str | None:
+        if call.tool_name not in allowed:
+            return None
+        try:
+            args = call.args_as_dict()
+        except (TypeError, ValueError):
+            return None
+        path = args.get("path") if isinstance(args, Mapping) else None
+        return path if isinstance(path, str) and path else None
+
+    return file_key
 
 
 def _harness_band(band: OutputBand) -> Band:
@@ -595,6 +715,8 @@ def _is_serialized_value(value: object) -> bool:
 
 __all__ = [
     "ArtifactRegistry",
+    "Compaction",
+    "CompactionDeps",
     "Context",
     "ContextConfigurationError",
     "StuckLoop",
