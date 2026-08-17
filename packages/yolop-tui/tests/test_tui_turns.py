@@ -35,7 +35,7 @@ from yolop_context import Compaction
 from yolop_runtime import ExecutionPin, Runtime, SessionPinMismatchError
 from yolop_sqlite_session import SQLiteRuntimeStore
 from yolop_tui import run_tui
-from yolop_tui.selection import SelectionOption
+from yolop_tui.selection import HistoryOption, SelectionOption
 
 from yolop import ProviderCatalog
 
@@ -111,6 +111,8 @@ class _ScriptedTerminal:
         self._ready = asyncio.Event()
         self._selection: tuple[SelectionOption, ...] | None = None
         self._selection_future: asyncio.Future[str | None] | None = None
+        self._history_selection: tuple[HistoryOption, ...] | None = None
+        self._history_future: asyncio.Future[tuple[str, str] | None] | None = None
         pipe.bind(self)
 
     async def run(self) -> None:
@@ -137,6 +139,21 @@ class _ScriptedTerminal:
             self._selection_future = None
             self._buffer = ""
 
+    async def choose_history(
+        self,
+        options: list[HistoryOption],
+    ) -> tuple[str, str] | None:
+        self._history_selection = tuple(options)
+        self._history_future = asyncio.get_running_loop().create_future()
+        self._buffer = ""
+        self._output.write("\n".join(option.label for option in options))
+        try:
+            return await self._history_future
+        finally:
+            self._history_selection = None
+            self._history_future = None
+            self._buffer = ""
+
     def set_transcript(self, renderable: RenderableType) -> None:
         stream = StringIO()
         Console(file=stream, width=80, color_system=None).print(renderable)
@@ -150,6 +167,23 @@ class _ScriptedTerminal:
 
     def feed_text(self, character: str) -> None:
         if character == "\r":
+            if self._history_selection is not None:
+                selected = next(
+                    (option for option in self._history_selection if option.selected),
+                    self._history_selection[0] if self._history_selection else None,
+                )
+                if self._buffer.casefold() == "f" and selected is not None:
+                    if self._history_future is not None:
+                        self._history_future.set_result(("fork", selected.value))
+                else:
+                    matches = [
+                        option
+                        for option in self._history_selection
+                        if _fuzzy_match(self._buffer.casefold(), option.label.casefold())
+                    ]
+                    if matches and self._history_future is not None:
+                        self._history_future.set_result(("checkout", matches[0].value))
+                return
             if self._selection is not None:
                 matches = [
                     option
@@ -184,6 +218,8 @@ class _ScriptedTerminal:
     def cancel(self) -> None:
         if self._selection_future is not None:
             self._selection_future.set_result(None)
+        elif self._history_future is not None:
+            self._history_future.set_result(None)
         else:
             self._on_cancel()
 
@@ -940,8 +976,8 @@ async def test_history_picker_can_fork_a_terminal_run(tmp_path: Path) -> None:
             )
             await _wait_for_output(output, "╭─ prompt")
             pipe_input.send_text("/history\r")
-            await _wait_for_output(output, "Fork ·")
-            pipe_input.send_text("Fork\r")
+            await _wait_for_output(output, "  └─ ▸ second")
+            pipe_input.send_text("f\r")
             await _wait_for_output(output, "Forked Session")
             pipe_input.send_text("/quit\r")
             await asyncio.wait_for(running, timeout=1)

@@ -15,7 +15,7 @@ from textual.widgets import Button, Input, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
 from .auth import AuthProvider, AuthStatus, DeviceAuthorization
-from .selection import SelectionOption
+from .selection import HistoryOption, SelectionOption
 from .suggestions import PromptCompleter, PromptCompletion
 
 
@@ -255,6 +255,117 @@ class _SessionPicker(ModalScreen[str | None]):
         options.clear_options()
         options.add_options(Option(option.label, id=option.value) for option in self._matches)
         options.highlighted = 0 if self._matches else None
+
+
+class _RunHistoryPicker(ModalScreen[tuple[str, str] | None]):
+    BINDINGS = [
+        Binding("escape", "cancel", priority=True),
+        Binding("enter", "checkout", priority=True),
+        Binding("f", "fork", priority=True),
+        Binding("up", "cursor_up", priority=True),
+        Binding("down", "cursor_down", priority=True),
+    ]
+    CSS = """
+    _RunHistoryPicker {
+        align: center middle;
+        background: $background 70%;
+    }
+
+    #run-history-picker {
+        width: 70%;
+        max-width: 110;
+        height: auto;
+        max-height: 80%;
+        min-height: 8;
+        border: round ansi_bright_black;
+        background: $surface;
+        padding: 1;
+    }
+
+    #history-filter {
+        width: 1fr;
+        height: 3;
+        border: round ansi_bright_black;
+    }
+
+    #history-options {
+        width: 1fr;
+        height: auto;
+        max-height: 60%;
+        min-height: 3;
+    }
+
+    #picker-help {
+        width: 1fr;
+        height: 1;
+        color: $text-muted;
+        margin-top: 1;
+    }
+    """
+
+    def __init__(self, options: list[HistoryOption]) -> None:
+        super().__init__()
+        self._options = tuple(options)
+        self._matches = self._options
+
+    def compose(self) -> ComposeResult:
+        yield Vertical(
+            Static("Run history", id="picker-title"),
+            Input(placeholder="Filter Runs", id="history-filter"),
+            OptionList(id="history-options"),
+            Static("↑↓ navigate · Enter checkout · F fork · Esc cancel", id="picker-help"),
+            id="run-history-picker",
+        )
+
+    def on_mount(self) -> None:
+        self._refresh_options("")
+        self.query_one("#history-options", OptionList).focus()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        self._refresh_options(event.value)
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        if event.option.id is not None:
+            self.dismiss(("checkout", event.option.id))
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def action_checkout(self) -> None:
+        self._dismiss_selected("checkout")
+
+    def action_fork(self) -> None:
+        self._dismiss_selected("fork")
+
+    def action_cursor_up(self) -> None:
+        self.query_one("#history-options", OptionList).action_cursor_up()
+
+    def action_cursor_down(self) -> None:
+        self.query_one("#history-options", OptionList).action_cursor_down()
+
+    def _dismiss_selected(self, action: str) -> None:
+        options = self.query_one("#history-options", OptionList)
+        if options.option_count == 0:
+            return
+        index = options.highlighted or 0
+        option = options.get_option_at_index(index)
+        if option.id is not None:
+            self.dismiss((action, option.id))
+
+    def _refresh_options(self, query: str) -> None:
+        self._matches = tuple(
+            option
+            for option in self._options
+            if _fuzzy_match(query.casefold(), option.label.casefold())
+        )
+        options = self.query_one("#history-options", OptionList)
+        options.clear_options()
+        options.add_options(Option(option.label, id=option.value) for option in self._matches)
+        selected = next(
+            (index for index, option in enumerate(self._matches) if option.selected),
+            0,
+        )
+        options.highlighted = selected if self._matches else None
 
 
 class _DeviceLogin(ModalScreen[bool]):
@@ -687,6 +798,25 @@ class TextualTerminal:
         )
         if not scheduled:
             raise RuntimeError("cannot open the session picker after the TUI has stopped")
+        return await future
+
+    async def choose_history(
+        self,
+        options: list[HistoryOption],
+    ) -> tuple[str, str] | None:
+        future: asyncio.Future[tuple[str, str] | None] = asyncio.get_running_loop().create_future()
+
+        def selected(value: tuple[str, str] | None) -> None:
+            if not future.done():
+                future.set_result(value)
+
+        scheduled = self.app.call_later(
+            self.app.push_screen,
+            _RunHistoryPicker(options),
+            selected,
+        )
+        if not scheduled:
+            raise RuntimeError("cannot open the Run history after the TUI has stopped")
         return await future
 
     def set_transcript(self, renderable: RenderableType) -> None:

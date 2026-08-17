@@ -7,7 +7,7 @@ from textual import events
 from textual.containers import VerticalScroll
 from textual.pilot import Pilot
 from textual.widgets import Input, OptionList, Static, TextArea
-from yolop_tui.selection import SelectionOption
+from yolop_tui.selection import HistoryOption, SelectionOption
 from yolop_tui.textual_app import TextualTerminal
 
 
@@ -145,6 +145,31 @@ async def test_textual_session_picker_opens_from_external_run_task() -> None:
     finally:
         terminal.stop()
         await running
+
+
+async def test_textual_run_history_picker_has_one_row_per_run_and_forks() -> None:
+    terminal = TextualTerminal(on_submit=lambda _text: None)
+    options = [
+        HistoryOption("first", "● Explain this project  · completed"),
+        HistoryOption("second", "  └─ Fix the failing test  · completed", selected=True),
+    ]
+
+    async with terminal.app.run_test(size=(80, 24)) as pilot:
+        selected = asyncio.create_task(terminal.choose_history(options))
+        await pilot.pause()
+
+        title = terminal.app.screen.query_one("#picker-title", Static)
+        option_list = terminal.app.screen.query_one("#history-options", OptionList)
+        help_text = terminal.app.screen.query_one("#picker-help", Static)
+        assert str(title.render()) == "Run history"
+        assert option_list.option_count == 2
+        assert option_list.get_option_at_index(0).prompt == options[0].label
+        assert option_list.get_option_at_index(1).prompt == options[1].label
+        assert "Enter checkout" in str(help_text.render())
+        assert "F fork" in str(help_text.render())
+
+        await pilot.press("f")
+        assert await asyncio.wait_for(selected, timeout=1) == ("fork", "second")
 
 
 async def test_textual_device_login_modal_shows_code_and_ctrl_c_cancels() -> None:

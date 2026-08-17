@@ -19,7 +19,6 @@ from pydantic_ai.run import EnqueueContent
 from yolop_runtime import (
     CompactionUnsupportedError,
     ExecutionPin,
-    RunStatus,
     Runtime,
     RuntimeContextSink,
     RuntimeEventSink,
@@ -36,7 +35,7 @@ from yolop import ProviderCatalog
 from .auth import AuthProvider, load_auth_providers
 from .files import FileReferenceError, prepare_prompt
 from .rendering import Transcript
-from .selection import SelectionOption
+from .selection import HistoryOption, SelectionOption
 from .textual_app import TextualTerminal
 
 _LOGGER = logging.getLogger(__name__)
@@ -186,13 +185,9 @@ async def run_tui[DepsT](
                             "use /resume to open another saved Session"
                         )
                     else:
-                        selected = await terminal.choose(
-                            options,
-                            title="Run history",
-                            placeholder="Filter Runs or actions",
-                        )
+                        selected = await terminal.choose_history(options)
                         if selected is not None:
-                            action, _, run_id = selected.partition(":")
+                            action, run_id = selected
                             current = await runtime.load_session(namespace, session.id)
                             if action == "checkout":
                                 session = await runtime.checkout(
@@ -571,28 +566,18 @@ async def _run_turn[DepsT](
     return completion.session
 
 
-def _run_history_options(tree: Sequence[RunTreeNode]) -> list[SelectionOption]:
-    options: list[SelectionOption] = []
+def _run_history_options(tree: Sequence[RunTreeNode]) -> list[HistoryOption]:
+    options: list[HistoryOption] = []
 
     def visit(node: RunTreeNode, depth: int) -> None:
-        if node.run.status in {
-            RunStatus.COMPLETED,
-            RunStatus.FAILED,
-            RunStatus.INTERRUPTED,
-        }:
-            prompt = " ".join(node.run.prompt.split()) or "(empty prompt)"
-            branch_count = len(node.children)
-            branch = f" · {branch_count} child Run(s)" if branch_count else ""
-            selected = " · selected" if node.selected else ""
-            label = node.label or ""
-            label_text = f" · label: {label}" if label else ""
-            prefix = "  " * depth
-            summary = (
-                f"{prefix}{node.run.id[:8]} · {node.run.status.value} · {prompt}"
-                f"{branch}{selected}{label_text}"
-            )
-            options.append(SelectionOption(f"checkout:{node.run.id}", f"Checkout · {summary}"))
-            options.append(SelectionOption(f"fork:{node.run.id}", f"Fork · {summary}"))
+        prompt = " ".join(node.run.prompt.split()) or "(empty prompt)"
+        if len(prompt) > 96:
+            prompt = f"{prompt[:93]}..."
+        tree_prefix = "  " * depth + ("└─ " if depth else "")
+        selected_prefix = "▸ " if node.selected else "  "
+        label = f" · {node.label}" if node.label else ""
+        summary = f"{tree_prefix}{selected_prefix}{prompt} · {node.run.status.value}{label}"
+        options.append(HistoryOption(node.run.id, summary, selected=node.selected))
         for child in node.children:
             visit(child, depth + 1)
 

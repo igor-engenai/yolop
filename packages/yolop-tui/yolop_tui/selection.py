@@ -5,3 +5,10 @@ from dataclasses import dataclass
 class SelectionOption:
     value: str
     label: str
+
+
+@dataclass(frozen=True)
+class HistoryOption:
+    value: str
+    label: str
+    selected: bool = False
