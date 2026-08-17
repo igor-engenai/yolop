@@ -5,7 +5,14 @@ from datetime import UTC, datetime
 from typing import Any
 
 from pydantic_ai import AgentSpec
-from pydantic_ai.messages import ModelMessage, TextPart
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    ToolCallPart,
+    ToolReturnPart,
+)
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.usage import RunUsage
 from pytest import raises
@@ -24,6 +31,8 @@ from yolop_runtime import (
     StateScope,
     StateSequenceConflictError,
 )
+
+from yolop import ProviderCatalog
 
 
 @dataclass
@@ -482,3 +491,78 @@ async def test_runtime_creates_a_session_and_completes_one_run() -> None:
     final_part = completion.session.messages[-1].parts[-1]
     assert isinstance(final_part, TextPart)
     assert final_part.content == "runtime works"
+
+
+async def test_runtime_keeps_canonical_history_when_compaction_rewrites_active_history() -> None:
+    from yolop_context import Compaction
+
+    class EntryPoint:
+        name = "Compaction"
+        value = "yolop_context:Compaction"
+        dist = None
+
+        @staticmethod
+        def load() -> type[Compaction]:
+            return Compaction
+
+    spec = AgentSpec(
+        model="test:model",
+        capabilities=[
+            {
+                "Compaction": {
+                    "target_tokens": 1,
+                    "keep_tool_pairs": 0,
+                    "include_summarizer": False,
+                }
+            }
+        ],
+    )
+    prior = [
+        ModelResponse(parts=[ToolCallPart("read_file", {}, tool_call_id="call")]),
+        ModelRequest(
+            parts=[ToolReturnPart("read_file", "old canonical result", tool_call_id="call")]
+        ),
+    ]
+    store = MemoryStore()
+    catalog = ProviderCatalog.from_entry_points(capability_entry_points=[EntryPoint()])
+    runtime = Runtime(store=store, provider_catalog=catalog)
+    session = await runtime.create_session("test", spec=spec, model_id="test:model")
+    assert store.session is not None
+    store.session = replace(store.session, messages=prior, revision="prior")
+
+    async def respond(_messages: list[ModelMessage], _info: AgentInfo) -> AsyncIterator[str]:
+        yield "new answer"
+
+    completion = await runtime.run(
+        "test",
+        session.id,
+        "current prompt",
+        spec=spec,
+        model=FunctionModel(stream_function=respond),
+        deps=None,
+        deps_type=type(None),
+        idempotency_key="compaction",
+    )
+
+    assert any(
+        isinstance(message, ModelRequest)
+        and any(
+            isinstance(part, ToolReturnPart) and part.content == "old canonical result"
+            for part in message.parts
+        )
+        for message in completion.run.full_messages
+    )
+    assert any(
+        isinstance(message, ModelRequest)
+        and any(
+            isinstance(part, ToolReturnPart) and part.content == "[tool result cleared]"
+            for part in message.parts
+        )
+        for message in completion.run.active_messages
+    )
+    assert any(
+        isinstance(part, TextPart) and part.content == "new answer"
+        for message in completion.run.full_messages
+        if isinstance(message, ModelResponse)
+        for part in message.parts
+    )
