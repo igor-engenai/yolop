@@ -92,6 +92,50 @@ async def test_impossible_goal_stops_with_reason(tmp_path: Path) -> None:
     assert len(await runtime.list_runs("tenant", session_id=session.id)) == 2
 
 
+async def test_stopping_goal_prevents_future_continuation(tmp_path: Path) -> None:
+    store = SQLiteRuntimeStore(tmp_path / "runtime.db")
+    runtime = Runtime(store=store)
+    work_spec = AgentSpec(model="test:model")
+    evaluator_spec = AgentSpec(model="test:evaluator", instructions="Return a verdict.")
+    session = await runtime.create_session("tenant", spec=work_spec, model_id="test:model")
+    evaluator_model = TestModel(
+        custom_output_args={"verdict": "unmet", "reason": "continue later"}
+    )
+    runner = GoalRunner(runtime)
+    record = await runner.start(
+        "tenant",
+        session.id,
+        goal="Stop before resuming.",
+        spec=work_spec,
+        model=TestModel(custom_output_text="attempted"),
+        model_id="test:model",
+        evaluator_spec=evaluator_spec,
+        evaluator_model=evaluator_model,
+        evaluator_model_id="test:evaluator",
+        deps=None,
+        deps_type=type(None),
+        max_turns=3,
+    )
+    stopped = await runner.stop("tenant", session.id, record.goal_id)
+    before = len(await runtime.list_runs("tenant", session_id=session.id))
+
+    resumed = await runner.resume(
+        "tenant",
+        session.id,
+        record.goal_id,
+        spec=work_spec,
+        model=TestModel(custom_output_text="should not run"),
+        model_id="test:model",
+        evaluator_model=evaluator_model,
+        deps=None,
+        deps_type=type(None),
+    )
+
+    assert stopped.status is GoalStatus.STOPPED
+    assert resumed.status is GoalStatus.STOPPED
+    assert len(await runtime.list_runs("tenant", session_id=session.id)) == before
+
+
 async def test_root_deadline_stops_goal_continuation(tmp_path: Path) -> None:
     current = datetime.now(UTC)
     deadline = current + timedelta(seconds=10)
