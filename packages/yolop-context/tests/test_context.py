@@ -6,14 +6,12 @@ from typing import Any
 
 import pytest
 from pydantic_ai import AgentSpec
-from pydantic_ai.models.test import TestModel
 from pydantic_ai.capabilities import CombinedCapability
+from pydantic_ai.models.test import TestModel
 from pydantic_ai.tools import RunContext
 from pydantic_ai.usage import RunUsage
 from pydantic_ai_harness.compaction import TranscriptHandleProvider
 from pydantic_ai_harness.tool_output_limits import ToolOutputLimits
-from yolop import ProviderCatalog
-from yolop_runtime import ExecutionScope
 from yolop_context import (
     Context,
     ContextConfigurationError,
@@ -21,6 +19,9 @@ from yolop_context import (
     ScopedOverflowStore,
     TranscriptHandle,
 )
+from yolop_runtime import ExecutionScope
+
+from yolop import ProviderCatalog
 
 
 @dataclass
@@ -41,7 +42,7 @@ def _context(spec: Context, *, deps: Any, run_id: str) -> RunContext[Any]:
         model=TestModel(),
         usage=RunUsage(),
         run_id=run_id,
-        capabilities={spec.get_serialization_name(): spec},
+        capabilities={"Context": spec},
     )
 
 
@@ -118,7 +119,7 @@ def test_context_binds_tool_output_limits_and_transcript_handle() -> None:
             if isinstance(capability, TranscriptHandleProvider)
         )
         assert isinstance(transcript, TranscriptHandle)
-        assert transcript.compaction_transcript_handle() == "run"
+        assert transcript.compaction_transcript_handle() == "00000000-0000-4000-8000-000000000002"
 
     asyncio_run(scenario())
 

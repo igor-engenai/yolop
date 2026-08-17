@@ -261,6 +261,10 @@ The core package contains the stateless runtime, AgentSpec capability discovery,
 
 [`packages/yolop-tui`](packages/yolop-tui) is the full-screen Textual terminal host. It owns Textual and Rich, the `yolop` command, a bundled Workspace coding AgentSpec, a managed interactive transcript, native steering and cancellation, compact tool and thinking views, `@file` policy, and modal local session selection. The packaged command depends on `yolop-workspace` and injects the current directory. The lower-level `run_tui(...)` still accepts caller-selected native dependencies. The package does not depend on prompt_toolkit or DuckDB.
 
+### `yolop-context`
+
+[`packages/yolop-context`](packages/yolop-context) is an optional capability plugin for safe Pydantic AI Harness context adapters. It resolves a host-provided overflow store per durable Session, exposes the YoloP Run ID to Harness compaction receipts, and rejects runtime objects or secret-bearing AgentSpec arguments. It does not perform compaction.
+
 ### `yolop-duckdb`
 
 [`packages/yolop-duckdb`](packages/yolop-duckdb) is a separate capability plugin. It owns the DuckDB dependency, resolves a host-provided read-only connection, and exposes the bounded `query_duckdb` model tool.

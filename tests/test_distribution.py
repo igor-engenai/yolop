@@ -54,6 +54,7 @@ def test_core_distribution_declares_only_core_runtime_dependencies() -> None:
 def test_distribution_publishes_current_entry_points() -> None:
     expected = {
         "yolop.capabilities": {
+            "Context": "yolop_context:Context",
             "DuckDB": "yolop_duckdb:DuckDB",
             "Skills": "yolop.skills:Skills",
             "Workspace": "yolop_workspace:Workspace",
@@ -74,6 +75,12 @@ def test_distribution_publishes_current_entry_points() -> None:
 def test_public_package_imports_load() -> None:
     public_imports = {
         "yolop": ("ProviderCatalog", "ProviderManifest", "Yolop"),
+        "yolop_context": (
+            "Context",
+            "ContextDeps",
+            "ScopedOverflowStore",
+            "TranscriptHandle",
+        ),
         "yolop_duckdb": ("DuckDB", "DuckDBDeps"),
         "yolop_providers": ("CodexOAuth", "create_codex_model"),
         "yolop_runtime": ("ExecutionScope", "Runtime", "RuntimeDeps"),
@@ -95,6 +102,7 @@ def test_distribution_publishes_install_profiles() -> None:
 
     assert set(package_metadata.get_all("Provides-Extra") or ()) == {
         "all",
+        "context",
         "duckdb",
         "openai",
         "providers",
@@ -105,6 +113,7 @@ def test_distribution_publishes_install_profiles() -> None:
 
     requirements = package_metadata.get_all("Requires-Dist") or ()
     expected_profile_dependencies = {
+        "context": {"yolop-context"},
         "duckdb": {"yolop-duckdb"},
         "openai": {"pydantic-ai-slim[openai]"},
         "providers": {"yolop-providers"},
@@ -113,6 +122,7 @@ def test_distribution_publishes_install_profiles() -> None:
         "workspace": {"yolop-workspace"},
         "all": {
             "pydantic-ai-slim[openai]",
+            "yolop-context",
             "yolop-duckdb",
             "yolop-providers",
             "yolop-runtime",

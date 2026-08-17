@@ -5,6 +5,7 @@ requires-python = ">=3.12"
 [manifest]
 members = [
     "yolop",
+    "yolop-context",
     "yolop-duckdb",
     "yolop-providers",
     "yolop-runtime",
@@ -1166,6 +1167,7 @@ dependencies = [
 [package.optional-dependencies]
 all = [
     { name = "pydantic-ai-slim", extra = ["openai"] },
+    { name = "yolop-context" },
     { name = "yolop-duckdb" },
     { name = "yolop-providers" },
     { name = "yolop-runtime" },
@@ -1174,6 +1176,9 @@ all = [
     { name = "yolop-webserver" },
     { name = "yolop-workspace" },
     { name = "yolop-workspace-session" },
+]
+context = [
+    { name = "yolop-context" },
 ]
 duckdb = [
     { name = "yolop-duckdb" },
@@ -1202,6 +1207,7 @@ dev = [
     { name = "pytest-asyncio" },
     { name = "ruff" },
     { name = "ty" },
+    { name = "yolop-context" },
     { name = "yolop-duckdb" },
     { name = "yolop-providers" },
     { name = "yolop-runtime" },
@@ -1218,6 +1224,8 @@ requires-dist = [
     { name = "pydantic-ai-slim", extras = ["openai"], marker = "extra == 'openai'", specifier = ">=2.31.0" },
     { name = "pydantic-ai-slim", extras = ["spec"], specifier = ">=2.31.0" },
     { name = "pyyaml", specifier = ">=6.0.3" },
+    { name = "yolop-context", marker = "extra == 'all'", editable = "packages/yolop-context" },
+    { name = "yolop-context", marker = "extra == 'context'", editable = "packages/yolop-context" },
     { name = "yolop-duckdb", marker = "extra == 'all'", editable = "packages/yolop-duckdb" },
     { name = "yolop-duckdb", marker = "extra == 'duckdb'", editable = "packages/yolop-duckdb" },
     { name = "yolop-providers", marker = "extra == 'all'", editable = "packages/yolop-providers" },
@@ -1232,7 +1240,7 @@ requires-dist = [
     { name = "yolop-workspace", marker = "extra == 'workspace'", editable = "packages/yolop-workspace" },
     { name = "yolop-workspace-session", marker = "extra == 'all'", editable = "packages/yolop-workspace-session" },
 ]
-provides-extras = ["workspace", "duckdb", "web", "tui", "openai", "providers", "all"]
+provides-extras = ["workspace", "context", "duckdb", "web", "tui", "openai", "providers", "all"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1242,6 +1250,7 @@ dev = [
     { name = "pytest-asyncio", specifier = ">=1.4.0" },
     { name = "ruff", specifier = ">=0.16.3" },
     { name = "ty", specifier = ">=0.0.72" },
+    { name = "yolop-context", editable = "packages/yolop-context" },
     { name = "yolop-duckdb", editable = "packages/yolop-duckdb" },
     { name = "yolop-providers", editable = "packages/yolop-providers" },
     { name = "yolop-runtime", editable = "packages/yolop-runtime" },
@@ -1250,6 +1259,21 @@ dev = [
     { name = "yolop-webserver", editable = "packages/yolop-webserver" },
     { name = "yolop-workspace", editable = "packages/yolop-workspace" },
     { name = "yolop-workspace-session", editable = "packages/yolop-workspace-session" },
+]
+
+[[package]]
+name = "yolop-context"
+version = "0.1.0"
+source = { editable = "packages/yolop-context" }
+dependencies = [
+    { name = "pydantic-ai-harness" },
+    { name = "pydantic-ai-slim" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "pydantic-ai-harness", specifier = ">=0.21.0,<0.22" },
+    { name = "pydantic-ai-slim", specifier = ">=2.31.0" },
 ]
 
 [[package]]

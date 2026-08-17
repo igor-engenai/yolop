@@ -1,0 +1,19 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "yolop-context"
+version = "0.1.0"
+description = "Safe YoloP adapters for Pydantic AI Harness context capabilities"
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic-ai-harness>=0.21.0,<0.22",
+    "pydantic-ai-slim>=2.31.0",
+]
+
+[project.entry-points."yolop.capabilities"]
+Context = "yolop_context:Context"
+
+[tool.hatch.build.targets.wheel]
+packages = ["yolop_context"]
