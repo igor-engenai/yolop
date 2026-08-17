@@ -54,6 +54,7 @@ def test_core_distribution_declares_only_core_runtime_dependencies() -> None:
 def test_distribution_publishes_current_entry_points() -> None:
     expected = {
         "yolop.capabilities": {
+            "Compaction": "yolop_context:Compaction",
             "Context": "yolop_context:Context",
             "DuckDB": "yolop_duckdb:DuckDB",
             "StuckLoop": "yolop_context:StuckLoop",
@@ -81,6 +82,8 @@ def test_public_package_imports_load() -> None:
         "yolop_context": (
             "ArtifactRegistry",
             "Context",
+            "Compaction",
+            "CompactionDeps",
             "ContextDeps",
             "StuckLoop",
             "StuckLoopError",
