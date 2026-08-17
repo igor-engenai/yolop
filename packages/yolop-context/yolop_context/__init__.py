@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import math
 from collections import deque
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from hashlib import sha256
 from typing import Any, Literal, Protocol, runtime_checkable
@@ -20,9 +21,14 @@ from pydantic_ai_harness.compaction import (
 from pydantic_ai_harness.tool_output_limits import (
     Band,
     OverflowStore,
+    Passthrough,
     Spill,
-    ToolOutputLimits,
+    Summarize,
     Truncate,
+    TruncationStrategy,
+)
+from pydantic_ai_harness.tool_output_limits import (
+    ToolOutputLimits as HarnessToolOutputLimits,
 )
 from pydantic_core import to_json
 
@@ -49,9 +55,14 @@ class StuckLoopError(UserError):
 class ContextScope(Protocol):
     """The durable scope identity required by host context resources."""
 
-    namespace: str
-    session_id: str
-    run_id: str
+    @property
+    def namespace(self) -> str: ...
+
+    @property
+    def session_id(self) -> str: ...
+
+    @property
+    def run_id(self) -> str: ...
 
 
 class ContextDeps(Protocol):
@@ -63,37 +74,100 @@ class ContextDeps(Protocol):
     @property
     def scope(self) -> ContextScope: ...
 
+    @property
+    def artifact_registry(self) -> ArtifactRegistry | None: ...
+
+
+@runtime_checkable
+class ArtifactRegistry(Protocol):
+    """Host-owned artifact metadata and session cleanup boundary."""
+
+    async def record_artifact(
+        self,
+        scope: ContextScope,
+        handle: str,
+        *,
+        size: int,
+    ) -> None: ...
+
+    async def delete_session_artifacts(self, namespace: str, session_id: str) -> None: ...
+
+    async def retain_run_artifacts(self, scope: ContextScope) -> None: ...
+
 
 @dataclass(frozen=True)
 class ScopedOverflowStore:
     """Bind a Harness overflow store to one YoloP namespace and Session."""
 
     store: OverflowStore
-    namespace: str
-    session_id: str
+    namespace: str | None = None
+    session_id: str | None = None
+    run_id: str | None = None
+    registry: ArtifactRegistry | None = None
+    scope: ContextScope | None = None
 
     def __post_init__(self) -> None:
+        if self.scope is not None:
+            object.__setattr__(self, "namespace", self.scope.namespace)
+            object.__setattr__(self, "session_id", self.scope.session_id)
+            object.__setattr__(self, "run_id", self.scope.run_id)
         if not isinstance(self.namespace, str) or not self.namespace:
             raise ValueError("Scoped overflow namespace must not be empty")
         if not isinstance(self.session_id, str) or not self.session_id:
             raise ValueError("Scoped overflow session_id must not be empty")
+        if self.registry is not None and (not isinstance(self.run_id, str) or not self.run_id):
+            raise ContextResourceError("Artifact registry requires a durable Run ID")
 
     async def write(self, key: str, data: bytes) -> str:
         backend_key = f"{self._prefix()}{key}"
         handle = await self.store.write(backend_key, data)
         if not isinstance(handle, str) or not handle:
             raise ContextResourceError("overflow_store.write must return a non-empty handle")
-        return f"{self._prefix()}{handle}"
+        public_handle = self._pack(handle)
+        if self.registry is not None:
+            await self.registry.record_artifact(
+                self._scope(),
+                public_handle,
+                size=len(data),
+            )
+        return public_handle
 
     async def read(self, handle: str) -> bytes:
         prefix = self._prefix()
         if not isinstance(handle, str) or not handle.startswith(prefix):
             raise PermissionError("Overflow handle belongs to a different scope")
-        return await self.store.read(handle[len(prefix) :])
+        encoded = handle[len(prefix) :]
+        try:
+            padding = "=" * (-len(encoded) % 4)
+            backend_handle = base64.urlsafe_b64decode(encoded + padding).decode()
+        except (UnicodeDecodeError, ValueError, binascii.Error) as error:
+            raise PermissionError("Overflow handle is invalid") from error
+        return await self.store.read(backend_handle)
+
+    def _pack(self, handle: str) -> str:
+        encoded = base64.urlsafe_b64encode(handle.encode()).decode().rstrip("=")
+        return f"{self._prefix()}{encoded}"
 
     def _prefix(self) -> str:
+        assert self.namespace is not None
+        assert self.session_id is not None
         namespace = base64.urlsafe_b64encode(self.namespace.encode()).decode().rstrip("=")
         return f"yolop-context-v1/{namespace}/{self.session_id}/"
+
+    def _scope(self) -> ContextScope:
+        if self.scope is not None:
+            return self.scope
+        assert self.namespace is not None
+        assert self.session_id is not None
+        assert self.run_id is not None
+        return _BoundScope(self.namespace, self.session_id, self.run_id)
+
+
+@dataclass(frozen=True)
+class _BoundScope:
+    namespace: str
+    session_id: str
+    run_id: str
 
 
 @dataclass
@@ -276,6 +350,86 @@ class StuckLoop(AbstractCapability[Any]):
         raise StuckLoopError(message)
 
 
+@dataclass(frozen=True)
+class OutputBand:
+    """Serialized policy for one bounded tool-output action."""
+
+    over: int
+    action: Literal["truncate", "spill", "summarize"]
+    max_chars: int = 4_000
+    preview_chars: int = 1_000
+    strategy: Literal["head", "tail", "head_tail"] = "head_tail"
+    fallback: Literal["truncate", "spill", "summarize", "passthrough"] | None = None
+
+    def __post_init__(self) -> None:
+        if isinstance(self.over, bool) or not isinstance(self.over, int) or self.over < 0:
+            raise ContextConfigurationError("OutputBand.over must be a non-negative integer")
+        for name in ("max_chars", "preview_chars"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise ContextConfigurationError(f"OutputBand.{name} must be positive")
+        if self.action not in {"truncate", "spill", "summarize"}:
+            raise ContextConfigurationError("OutputBand.action is unsupported")
+        if self.strategy not in {"head", "tail", "head_tail"}:
+            raise ContextConfigurationError("OutputBand.strategy is unsupported")
+        if self.fallback == self.action:
+            raise ContextConfigurationError("OutputBand fallback must differ from its action")
+
+
+@dataclass
+class ToolOutputLimits(AbstractCapability[Any]):
+    """Safely adapt Harness ToolOutputLimits to a host-scoped overflow store."""
+
+    bands: Sequence[OutputBand] = field(
+        default_factory=lambda: (OutputBand(over=10_000, action="spill", fallback="truncate"),)
+    )
+    over_tokens: bool = False
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.bands, (list, tuple)) or not self.bands:
+            raise ContextConfigurationError("ToolOutputLimits.bands must not be empty")
+        normalized: list[OutputBand] = []
+        for band in self.bands:
+            if isinstance(band, OutputBand):
+                normalized.append(band)
+            elif isinstance(band, Mapping):
+                try:
+                    normalized.append(OutputBand(**band))
+                except (TypeError, ValueError) as error:
+                    raise ContextConfigurationError(
+                        "ToolOutputLimits contains an invalid band"
+                    ) from error
+            else:
+                raise ContextConfigurationError("ToolOutputLimits.bands must contain objects")
+        self.bands = tuple(normalized)
+        if not isinstance(self.over_tokens, bool):
+            raise ContextConfigurationError("ToolOutputLimits.over_tokens must be a boolean")
+
+    @classmethod
+    def from_spec(cls, *args: Any, **kwargs: Any) -> ToolOutputLimits:
+        if args or not _is_serialized_value(kwargs):
+            raise ContextConfigurationError(
+                "ToolOutputLimits accepts serialized capability arguments only"
+            )
+        supported = {"bands", "over_tokens"}
+        unknown = sorted(set(kwargs) - supported)
+        if unknown:
+            raise ContextConfigurationError(
+                f"ToolOutputLimits arguments are unsupported: {', '.join(unknown)}"
+            )
+        return cls(**kwargs)
+
+    async def for_run(self, ctx: RunContext[Any]) -> AbstractCapability[Any]:
+        store = _overflow_store(ctx.deps)
+        scope = _scope(ctx.deps)
+        registry = _artifact_registry(ctx.deps)
+        return HarnessToolOutputLimits(
+            bands=[_harness_band(band) for band in self.bands],
+            over_tokens=self.over_tokens,
+            store=ScopedOverflowStore(store, registry=registry, scope=scope),
+        )
+
+
 @dataclass
 class Context(AbstractCapability[Any]):
     """Bind safe Harness context helpers to host-scoped YoloP resources."""
@@ -305,29 +459,44 @@ class Context(AbstractCapability[Any]):
 
     async def for_run(self, ctx: RunContext[Any]) -> AbstractCapability[Any]:
         """Resolve scoped storage and the durable transcript handle for this Run."""
-        store = _overflow_store(ctx.deps)
-        scope = _scope(ctx.deps)
-        return CombinedCapability(
-            [
-                ToolOutputLimits(
-                    bands=[
-                        Band(
-                            over=self.overflow_threshold,
-                            action=Spill(
-                                preview_chars=self.preview_chars,
-                                then=Truncate(max_chars=self.truncate_chars),
-                            ),
-                        )
-                    ],
-                    store=ScopedOverflowStore(
-                        store,
-                        namespace=scope.namespace,
-                        session_id=scope.session_id,
-                    ),
-                ),
-                TranscriptHandle(handle=scope.run_id),
+        output = await ToolOutputLimits(
+            bands=[
+                OutputBand(
+                    over=self.overflow_threshold,
+                    action="spill",
+                    preview_chars=self.preview_chars,
+                    max_chars=self.truncate_chars,
+                    fallback="truncate",
+                )
             ]
-        )
+        ).for_run(ctx)
+        scope = _scope(ctx.deps)
+        return CombinedCapability([output, TranscriptHandle(handle=scope.run_id)])
+
+
+def _harness_band(band: OutputBand) -> Band:
+    strategy = TruncationStrategy(band.strategy)
+    fallback = _harness_action(band.fallback, band) if band.fallback is not None else None
+    if band.action == "truncate":
+        action: Any = Truncate(max_chars=band.max_chars, strategy=strategy, then=fallback)
+    elif band.action == "spill":
+        action = Spill(preview_chars=band.preview_chars, then=fallback)
+    else:
+        action = Summarize(then=fallback)
+    return Band(over=band.over, action=action)
+
+
+def _harness_action(
+    action_name: Literal["truncate", "spill", "summarize", "passthrough"],
+    band: OutputBand,
+) -> Any:
+    if action_name == "passthrough":
+        return Passthrough()
+    if action_name == "truncate":
+        return Truncate(max_chars=band.max_chars, strategy=TruncationStrategy(band.strategy))
+    if action_name == "spill":
+        return Spill(preview_chars=band.preview_chars)
+    return Summarize()
 
 
 def _tail_count(history: deque[str]) -> int:
@@ -350,6 +519,42 @@ def _fingerprint(value: Any) -> str:
             f"{type(value).__module__}:{type(value).__qualname__}:{repr(value)[:4096]}"
         ).encode()
     return sha256(encoded).hexdigest()
+
+
+def _artifact_registry(deps: Any) -> ArtifactRegistry | None:
+    registry = getattr(deps, "artifact_registry", None)
+    if registry is None:
+        return None
+    if not callable(getattr(registry, "record_artifact", None)):
+        raise ContextResourceError("Context capability requires artifact_registry.record_artifact")
+    return registry
+
+
+async def retain_run_artifacts(deps: Any, scope: ContextScope) -> None:
+    """Mark completed-run artifacts for host retention instead of session cleanup."""
+    registry = getattr(deps, "artifact_registry", None)
+    if registry is None:
+        return
+    retain = getattr(registry, "retain_run_artifacts", None)
+    if not callable(retain):
+        raise ContextResourceError("Context artifact registry lacks retain_run_artifacts")
+    await retain(scope)
+
+
+async def cleanup_session_artifacts(
+    deps: Any,
+    *,
+    namespace: str,
+    session_id: str,
+) -> None:
+    """Delete artifacts owned by a Session through an explicit host registry."""
+    registry = getattr(deps, "artifact_registry", None)
+    if registry is None:
+        return
+    delete = getattr(registry, "delete_session_artifacts", None)
+    if not callable(delete):
+        raise ContextResourceError("Context artifact registry lacks delete_session_artifacts")
+    await delete(namespace, session_id)
 
 
 def _overflow_store(deps: Any) -> OverflowStore:
@@ -389,6 +594,7 @@ def _is_serialized_value(value: object) -> bool:
 
 
 __all__ = [
+    "ArtifactRegistry",
     "Context",
     "ContextConfigurationError",
     "StuckLoop",
@@ -397,6 +603,10 @@ __all__ = [
     "ContextDeps",
     "ContextResourceError",
     "ContextScope",
+    "OutputBand",
     "ScopedOverflowStore",
+    "ToolOutputLimits",
     "TranscriptHandle",
+    "cleanup_session_artifacts",
+    "retain_run_artifacts",
 ]
