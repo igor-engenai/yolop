@@ -91,6 +91,40 @@ async def test_impossible_goal_stops_with_reason(tmp_path: Path) -> None:
     assert len(await runtime.list_runs("tenant", session_id=session.id)) == 2
 
 
+async def test_maximum_turns_stops_unmet_goal(tmp_path: Path) -> None:
+    store = SQLiteRuntimeStore(tmp_path / "runtime.db")
+    runtime = Runtime(store=store)
+    work_spec = AgentSpec(model="test:model")
+    evaluator_spec = AgentSpec(
+        model="test:evaluator",
+        output_schema={
+            "type": "object",
+            "properties": {"verdict": {"type": "string"}, "reason": {"type": "string"}},
+            "required": ["verdict", "reason"],
+        },
+    )
+    session = await runtime.create_session("tenant", spec=work_spec, model_id="test:model")
+
+    record = await GoalRunner(runtime).start(
+        "tenant",
+        session.id,
+        goal="Do not stop yet.",
+        spec=work_spec,
+        model=TestModel(custom_output_text="attempted"),
+        model_id="test:model",
+        evaluator_spec=evaluator_spec,
+        evaluator_model=TestModel(custom_output_args={"verdict": "unmet", "reason": "not done"}),
+        evaluator_model_id="test:evaluator",
+        deps=None,
+        deps_type=type(None),
+        max_turns=1,
+    )
+
+    assert record.status is GoalStatus.EXHAUSTED
+    assert record.reason == "not done"
+    assert len(await runtime.list_runs("tenant", session_id=session.id)) == 2
+
+
 async def test_evaluator_failure_continues_within_the_goal_budget(tmp_path: Path) -> None:
     async def fail(_messages: list[ModelMessage], _info: AgentInfo) -> AsyncIterator[str]:
         raise RuntimeError("evaluator unavailable")
