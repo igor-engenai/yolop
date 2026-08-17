@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from pydantic_ai import AgentSpec
 from pydantic_ai.models.test import TestModel
 from pydantic_ai.tools import RunContext
 from pydantic_ai.usage import RunUsage
+from pydantic_ai_harness.planning import PlanningToolset
 from yolop_deep import PlanItem, Planning, SessionPlanStore, TaskStatus
 from yolop_runtime import ExecutionPin, ExecutionScope, RuntimeDeps, ScopedStateContext
 from yolop_sqlite_session import SQLiteRuntimeStore
@@ -51,8 +53,7 @@ async def test_subtask_dependencies_hide_blocked_work(tmp_path: Path) -> None:
         run_id=runtime_session.id,
     )
     capability = await Planning.from_spec(enable_subtasks=True).for_run(context)
-    toolset = capability.get_toolset()
-    assert toolset is not None
+    toolset = cast(PlanningToolset[Any], capability.get_toolset())
 
     message = await toolset.set_dependency(context, "second", "first")
     assert "blocked" in message
@@ -64,12 +65,12 @@ async def test_subtask_dependencies_hide_blocked_work(tmp_path: Path) -> None:
 
 def test_tool_allowlist_changes_tools_and_guidance_together() -> None:
     capability = Planning.from_spec(tools=["write_plan"])
-    toolset = capability.get_toolset()
+    toolset = cast(PlanningToolset[Any], capability.get_toolset())
+    guidance = cast(str | None, capability.get_instructions())
 
-    assert toolset is not None
     assert set(toolset.tools) == {"write_plan"}
-    assert "write_plan" in (capability.get_instructions() or "")
-    assert "read_plan" not in (capability.get_instructions() or "")
+    assert "write_plan" in (guidance or "")
+    assert "read_plan" not in (guidance or "")
 
 
 def test_agent_spec_storage_arguments_are_rejected() -> None:
