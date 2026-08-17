@@ -92,15 +92,57 @@ async def test_impossible_goal_stops_with_reason(tmp_path: Path) -> None:
     assert len(await runtime.list_runs("tenant", session_id=session.id)) == 2
 
 
+async def test_process_restart_resumes_active_goal_once(tmp_path: Path) -> None:
+    database = tmp_path / "runtime.db"
+    first_store = SQLiteRuntimeStore(database)
+    first_runtime = Runtime(store=first_store)
+    work_spec = AgentSpec(model="test:model")
+    evaluator_spec = AgentSpec(model="test:evaluator", instructions="Return a verdict.")
+    session = await first_runtime.create_session("tenant", spec=work_spec, model_id="test:model")
+    evaluator_model = TestModel(custom_output_args={"verdict": "unmet", "reason": "continue"})
+    first = await GoalRunner(first_runtime).start(
+        "tenant",
+        session.id,
+        goal="Continue after restart.",
+        spec=work_spec,
+        model=TestModel(custom_output_text="attempted"),
+        model_id="test:model",
+        evaluator_spec=evaluator_spec,
+        evaluator_model=evaluator_model,
+        evaluator_model_id="test:evaluator",
+        deps=None,
+        deps_type=type(None),
+        max_turns=3,
+    )
+    before = await first_runtime.list_runs("tenant", session_id=session.id)
+
+    reopened_runtime = Runtime(store=SQLiteRuntimeStore(database))
+    resumed = await GoalRunner(reopened_runtime).resume(
+        "tenant",
+        session.id,
+        first.goal_id,
+        spec=work_spec,
+        model=TestModel(custom_output_text="resumed"),
+        model_id="test:model",
+        evaluator_model=evaluator_model,
+        deps=None,
+        deps_type=type(None),
+    )
+    after = await reopened_runtime.list_runs("tenant", session_id=session.id)
+
+    assert resumed.turns == 3
+    assert resumed.status is GoalStatus.ACTIVE
+    assert len(after) == len(before) + 2
+    assert len({run.id for run in after}) == len(after)
+
+
 async def test_stopping_goal_prevents_future_continuation(tmp_path: Path) -> None:
     store = SQLiteRuntimeStore(tmp_path / "runtime.db")
     runtime = Runtime(store=store)
     work_spec = AgentSpec(model="test:model")
     evaluator_spec = AgentSpec(model="test:evaluator", instructions="Return a verdict.")
     session = await runtime.create_session("tenant", spec=work_spec, model_id="test:model")
-    evaluator_model = TestModel(
-        custom_output_args={"verdict": "unmet", "reason": "continue later"}
-    )
+    evaluator_model = TestModel(custom_output_args={"verdict": "unmet", "reason": "continue later"})
     runner = GoalRunner(runtime)
     record = await runner.start(
         "tenant",
