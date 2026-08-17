@@ -123,9 +123,13 @@ class ProviderCatalog:
                 return provider.capability_type
         raise ValueError(f"Capability {name!r} is not in provider catalog")
 
+    def selected_capability_names(self, spec: AgentSpec | Mapping[str, Any]) -> tuple[str, ...]:
+        """Return capability names selected by an AgentSpec, including nested selections."""
+        return _selected_capability_names(spec)
+
     def validate_spec(self, spec: AgentSpec | Mapping[str, Any]) -> None:
         """Reject custom capabilities unavailable in this catalog before AgentSpec loading."""
-        for name in _selected_capability_names(spec):
+        for name in self.selected_capability_names(spec):
             if name not in CAPABILITY_TYPES and not self.has_capability(name):
                 raise ValueError(f"Capability {name!r} is not in provider catalog")
 
