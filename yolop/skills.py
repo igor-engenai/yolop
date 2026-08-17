@@ -1,15 +1,28 @@
-from collections.abc import Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from hashlib import sha256
 from importlib.resources import files
 from typing import Any
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
-from pydantic_ai import ModelRetry, Tool
+from pydantic_ai import BinaryContent, ModelRetry, Tool
 from pydantic_ai.capabilities import AbstractCapability
 from pydantic_ai.toolsets import FunctionToolset
 
 _BUILTIN_SKILLS = frozenset({"tdd"})
+
+
+class SkillResource(BaseModel):
+    """An immutable manifest entry for one explicit skill resource."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]*$")
+    description: str = ""
+    media_type: str = Field(pattern=r"^[^\s/]+/[^\s]+$")
+    size: int = Field(ge=0)
+    digest: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
 class Skill(BaseModel):
@@ -20,24 +33,33 @@ class Skill(BaseModel):
     name: str = Field(pattern=r"^[a-z0-9][a-z0-9-]*$")
     description: str
     instructions: str
+    resources: tuple[SkillResource, ...] = ()
+    source_identity: str = "agent-spec"
+    digest: str = ""
+
+
+ResourceLoader = Callable[[str, str], str | bytes]
 
 
 @dataclass
 class Skills(AbstractCapability[Any]):
-    """Expose AgentSpec-selected bundled and inline skills to an agent."""
+    """Expose immutable bundled, inline, and host-library skills to an agent."""
 
     skills: tuple[Skill, ...] = ()
+    resource_loaders: Mapping[str, ResourceLoader] = field(default_factory=dict, repr=False)
     _by_name: dict[str, Skill] = field(init=False, repr=False)
     _toolset: FunctionToolset[Any] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        self._by_name = {skill.name: skill for skill in self.skills}
-        if len(self._by_name) != len(self.skills):
+        normalized = tuple(_normalize_skill(skill) for skill in self.skills)
+        self.skills = normalized
+        self._by_name = {skill.name: skill for skill in normalized}
+        if len(self._by_name) != len(normalized):
             raise ValueError("Skill names must be unique")
-        self._toolset = FunctionToolset(
-            [Tool(self.load_skill, takes_ctx=False)],
-            id="skills",
-        )
+        tools: list[Any] = [Tool(self.load_skill, takes_ctx=False)]
+        if any(skill.resources for skill in normalized):
+            tools.append(Tool(self.load_skill_resource, takes_ctx=False))
+        self._toolset = FunctionToolset(tools, id="skills")
 
     @classmethod
     def from_spec(
@@ -65,6 +87,37 @@ class Skills(AbstractCapability[Any]):
             available = ", ".join(sorted(self._by_name))
             raise ModelRetry(f"Unknown skill {name!r}. Available skills: {available}") from error
         return f"# Skill: {skill.name}\n\n{skill.instructions}"
+
+    def load_skill_resource(self, skill_name: str, resource_name: str) -> str | BinaryContent:
+        """Load one manifest-listed skill resource after explicit model selection."""
+        skill = self._by_name.get(skill_name)
+        if skill is None:
+            raise ModelRetry(f"Unknown skill {skill_name!r}")
+        resource = next((item for item in skill.resources if item.name == resource_name), None)
+        if resource is None:
+            raise ModelRetry(f"Unknown resource {resource_name!r} for skill {skill_name!r}")
+        loader = self.resource_loaders.get(f"{skill_name}/{resource_name}")
+        if loader is None:
+            raise ModelRetry(f"Resource {resource_name!r} is unavailable")
+        value = loader(skill_name, resource_name)
+        data = value.encode() if isinstance(value, str) else value
+        if len(data) != resource.size or sha256(data).hexdigest() != resource.digest:
+            raise ModelRetry(f"Resource {resource_name!r} changed; reload the skill snapshot")
+        if resource.media_type.startswith("text/"):
+            try:
+                return data.decode("utf-8")
+            except UnicodeDecodeError as error:
+                raise ModelRetry("Text skill resource is not valid UTF-8") from error
+        return BinaryContent(data=data, media_type=resource.media_type)
+
+
+def _normalize_skill(skill: Skill) -> Skill:
+    if skill.digest:
+        return skill
+    canonical = yaml.safe_dump(
+        skill.model_dump(mode="json", exclude={"digest"}), sort_keys=True
+    ).encode()
+    return skill.model_copy(update={"digest": sha256(canonical).hexdigest()})
 
 
 def _load_builtin_skill(name: str) -> Skill:

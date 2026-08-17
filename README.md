@@ -254,6 +254,8 @@ Use `yolop.ToolPolicy` for host-owned tool decisions. It supports bounded argume
 
 The core package contains the stateless runtime, AgentSpec capability discovery, the generic Skills capability, and bundled default skills. It does not contain agent-specific AgentSpecs, Workspace code, DuckDB, persistence, FastAPI, model providers, or `pydantic-ai-harness`.
 
+Hosts can resolve immutable skill libraries with `resolve_skill_libraries(...)`. AgentSpec metadata selects library aliases and skill names; the resulting digest can be added with `SkillLibraryResolution.pinned_spec(...)` before creating a Session. Skill resources are explicit, bounded, and never execute scripts.
+
 ### `yolop-providers`
 
 [`packages/yolop-providers`](packages/yolop-providers) is the optional model-provider distribution. It registers `openai-codex:<model>` through `yolop.model_providers`, adapts ChatGPT subscription OAuth to Pydantic AI's native `OpenAIResponsesModel`, owns device-code login and automatic refresh, and exposes the standalone `yolop-providers` credential command. It does not own the agent loop, messages, tools, streaming events, or session persistence.
