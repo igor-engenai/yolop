@@ -11,7 +11,7 @@ def test_bundled_default_is_a_high_thinking_workspace_coding_agent() -> None:
     spec = AgentSpec.from_file(Path(package_file).parent / "agent_specs" / "coding.yaml")
 
     assert spec.name == "coding"
-    assert spec.model == "openai:gpt-5.6-luna"
+    assert spec.model == "openai-codex:gpt-5.6-luna"
     assert spec.model_settings == {"thinking": "high"}
     assert isinstance(spec.instructions, str)
     assert "coding agent" in spec.instructions
