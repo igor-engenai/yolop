@@ -92,6 +92,43 @@ async def test_impossible_goal_stops_with_reason(tmp_path: Path) -> None:
     assert len(await runtime.list_runs("tenant", session_id=session.id)) == 2
 
 
+async def test_goals_are_isolated_by_session_and_namespace(tmp_path: Path) -> None:
+    store = SQLiteRuntimeStore(tmp_path / "runtime.db")
+    runtime = Runtime(store=store)
+    work_spec = AgentSpec(model="test:model")
+    evaluator_spec = AgentSpec(model="test:evaluator", instructions="Return a verdict.")
+    first = await runtime.create_session("tenant-a", spec=work_spec, model_id="test:model")
+    second = await runtime.create_session("tenant-a", spec=work_spec, model_id="test:model")
+    other = await runtime.create_session("tenant-b", spec=work_spec, model_id="test:model")
+    runner = GoalRunner(runtime)
+
+    async def start(namespace: str, session_id: str, text: str):
+        return await runner.start(
+            namespace,
+            session_id,
+            goal=text,
+            spec=work_spec,
+            model=TestModel(custom_output_text="attempted"),
+            model_id="test:model",
+            evaluator_spec=evaluator_spec,
+            evaluator_model=TestModel(
+                custom_output_args={"verdict": "met", "reason": "done"}
+            ),
+            evaluator_model_id="test:evaluator",
+            deps=None,
+            deps_type=type(None),
+        )
+
+    first_goal = await start("tenant-a", first.id, "first")
+    second_goal = await start("tenant-a", second.id, "second")
+    other_goal = await start("tenant-b", other.id, "other")
+
+    assert await runner.get("tenant-a", first.id, first_goal.goal_id) is not None
+    assert await runner.get("tenant-a", first.id, second_goal.goal_id) is None
+    assert await runner.get("tenant-b", other.id, other_goal.goal_id) is not None
+    assert await runner.get("tenant-b", other.id, first_goal.goal_id) is None
+
+
 async def test_process_restart_resumes_active_goal_once(tmp_path: Path) -> None:
     database = tmp_path / "runtime.db"
     first_store = SQLiteRuntimeStore(database)
