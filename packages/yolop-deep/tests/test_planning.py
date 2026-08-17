@@ -104,6 +104,36 @@ async def test_process_restart_preserves_the_session_plan(tmp_path: Path) -> Non
     assert [item.content for item in await reopened_plan.get_items()] == ["survive restart"]
 
 
+async def test_plans_are_isolated_by_session_and_namespace(tmp_path: Path) -> None:
+    store = SQLiteRuntimeStore(tmp_path / "runtime.db")
+    runtime = Runtime(store=store)
+    spec = AgentSpec(model="test:model")
+    first = await runtime.create_session("tenant-a", spec=spec, model_id="test:model")
+    second = await runtime.create_session("tenant-a", spec=spec, model_id="test:model")
+    other_namespace = await runtime.create_session("tenant-b", spec=spec, model_id="test:model")
+
+    async def plan_for(namespace: str, session_id: str) -> SessionPlanStore:
+        return SessionPlanStore(
+            ScopedStateContext(
+                store=store,
+                namespace=namespace,
+                session_id=session_id,
+                run_id=session_id,
+            )
+        )
+
+    first_plan = await plan_for("tenant-a", first.id)
+    second_plan = await plan_for("tenant-a", second.id)
+    other_plan = await plan_for("tenant-b", other_namespace.id)
+    await first_plan.set_items([PlanItem(content="first")])
+    await second_plan.set_items([PlanItem(content="second")])
+    await other_plan.set_items([PlanItem(content="other namespace")])
+
+    assert [item.content for item in await first_plan.get_items()] == ["first"]
+    assert [item.content for item in await second_plan.get_items()] == ["second"]
+    assert [item.content for item in await other_plan.get_items()] == ["other namespace"]
+
+
 async def test_later_run_reads_the_same_session_plan(tmp_path: Path) -> None:
     catalog = ProviderCatalog.from_entry_points(capability_entry_points=[EntryPoint()])
     store = SQLiteRuntimeStore(tmp_path / "runtime.db")
