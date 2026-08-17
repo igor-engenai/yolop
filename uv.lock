@@ -15,6 +15,7 @@ members = [
     "yolop-deep",
     "yolop-duckdb",
     "yolop-mcp",
+    "yolop-memory",
     "yolop-providers",
     "yolop-runtime",
     "yolop-sqlite-session",
@@ -1838,6 +1839,7 @@ all = [
     { name = "yolop-deep" },
     { name = "yolop-duckdb" },
     { name = "yolop-mcp" },
+    { name = "yolop-memory" },
     { name = "yolop-providers" },
     { name = "yolop-runtime" },
     { name = "yolop-sqlite-session" },
@@ -1857,6 +1859,9 @@ duckdb = [
 ]
 mcp = [
     { name = "yolop-mcp" },
+]
+memory = [
+    { name = "yolop-memory" },
 ]
 openai = [
     { name = "pydantic-ai-slim", extra = ["openai"] },
@@ -1886,6 +1891,7 @@ dev = [
     { name = "yolop-deep" },
     { name = "yolop-duckdb" },
     { name = "yolop-mcp" },
+    { name = "yolop-memory" },
     { name = "yolop-providers" },
     { name = "yolop-runtime" },
     { name = "yolop-sqlite-session" },
@@ -1909,6 +1915,8 @@ requires-dist = [
     { name = "yolop-duckdb", marker = "extra == 'duckdb'", editable = "packages/yolop-duckdb" },
     { name = "yolop-mcp", marker = "extra == 'all'", editable = "packages/yolop-mcp" },
     { name = "yolop-mcp", marker = "extra == 'mcp'", editable = "packages/yolop-mcp" },
+    { name = "yolop-memory", marker = "extra == 'all'", editable = "packages/yolop-memory" },
+    { name = "yolop-memory", marker = "extra == 'memory'", editable = "packages/yolop-memory" },
     { name = "yolop-providers", marker = "extra == 'all'", editable = "packages/yolop-providers" },
     { name = "yolop-providers", marker = "extra == 'providers'", editable = "packages/yolop-providers" },
     { name = "yolop-runtime", marker = "extra == 'all'", editable = "packages/yolop-runtime" },
@@ -1921,7 +1929,7 @@ requires-dist = [
     { name = "yolop-workspace", marker = "extra == 'workspace'", editable = "packages/yolop-workspace" },
     { name = "yolop-workspace-session", marker = "extra == 'all'", editable = "packages/yolop-workspace-session" },
 ]
-provides-extras = ["workspace", "context", "deep", "duckdb", "mcp", "web", "tui", "openai", "providers", "all"]
+provides-extras = ["workspace", "context", "deep", "duckdb", "mcp", "memory", "web", "tui", "openai", "providers", "all"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1935,6 +1943,7 @@ dev = [
     { name = "yolop-deep", editable = "packages/yolop-deep" },
     { name = "yolop-duckdb", editable = "packages/yolop-duckdb" },
     { name = "yolop-mcp", editable = "packages/yolop-mcp" },
+    { name = "yolop-memory", editable = "packages/yolop-memory" },
     { name = "yolop-providers", editable = "packages/yolop-providers" },
     { name = "yolop-runtime", editable = "packages/yolop-runtime" },
     { name = "yolop-sqlite-session", editable = "packages/yolop-sqlite-session" },
@@ -2005,6 +2014,21 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "pydantic-ai-slim", extras = ["mcp"], specifier = ">=2.31.0" }]
+
+[[package]]
+name = "yolop-memory"
+version = "0.1.0"
+source = { editable = "packages/yolop-memory" }
+dependencies = [
+    { name = "pydantic-ai-slim" },
+    { name = "yolop-runtime" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "pydantic-ai-slim", specifier = ">=2.31.0" },
+    { name = "yolop-runtime", editable = "packages/yolop-runtime" },
+]
 
 [[package]]
 name = "yolop-providers"

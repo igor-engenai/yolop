@@ -19,6 +19,7 @@ context = ["yolop-context>=0.1.0,<0.2.0"]
 deep = ["yolop-deep>=0.1.0,<0.2.0"]
 duckdb = ["yolop-duckdb>=0.1.0,<0.2.0"]
 mcp = ["yolop-mcp>=0.1.0,<0.2.0"]
+memory = ["yolop-memory>=0.1.0,<0.2.0"]
 web = ["yolop-webserver>=0.1.0,<0.2.0"]
 tui = ["yolop-tui>=0.1.0,<0.2.0"]
 openai = ["pydantic-ai-slim[openai]>=2.31.0"]
@@ -29,6 +30,7 @@ all = [
     "yolop-deep>=0.1.0,<0.2.0",
     "yolop-duckdb>=0.1.0,<0.2.0",
     "yolop-mcp>=0.1.0,<0.2.0",
+    "yolop-memory>=0.1.0,<0.2.0",
     "yolop-providers>=0.1.0,<0.2.0",
     "yolop-runtime>=0.1.0,<0.2.0",
     "yolop-sqlite-session>=0.1.0,<0.2.0",
@@ -54,6 +56,7 @@ dev = [
     "yolop-deep",
     "yolop-duckdb",
     "yolop-mcp",
+    "yolop-memory",
     "yolop-providers",
     "yolop-runtime",
     "yolop-sqlite-session",
@@ -72,6 +75,7 @@ yolop-context = { workspace = true }
 yolop-deep = { workspace = true }
 yolop-duckdb = { workspace = true }
 yolop-mcp = { workspace = true }
+yolop-memory = { workspace = true }
 yolop-providers = { workspace = true }
 yolop-runtime = { workspace = true }
 yolop-sqlite-session = { workspace = true }
@@ -86,6 +90,7 @@ members = [
     "packages/yolop-deep",
     "packages/yolop-duckdb",
     "packages/yolop-mcp",
+    "packages/yolop-memory",
     "packages/yolop-providers",
     "packages/yolop-runtime",
     "packages/yolop-sqlite-session",
@@ -104,6 +109,7 @@ testpaths = [
     "packages/yolop-deep/tests",
     "packages/yolop-duckdb/tests",
     "packages/yolop-mcp/tests",
+    "packages/yolop-memory/tests",
     "packages/yolop-providers/tests",
     "packages/yolop-runtime/tests",
     "packages/yolop-sqlite-session/tests",
