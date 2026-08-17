@@ -2140,12 +2140,14 @@ source = { editable = "packages/yolop-workspace" }
 dependencies = [
     { name = "pydantic-ai-harness" },
     { name = "pydantic-ai-slim" },
+    { name = "yolop-runtime" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "pydantic-ai-harness", specifier = ">=0.21.0,<0.22" },
     { name = "pydantic-ai-slim", specifier = ">=2.31.0" },
+    { name = "yolop-runtime", editable = "packages/yolop-runtime" },
 ]
 
 [[package]]

@@ -8,7 +8,43 @@ from pydantic_ai.exceptions import UserError
 from pydantic_ai.tools import RunContext
 from pydantic_ai_harness import LLM_API_KEY_ENV_PATTERNS, FileSystem, Shell
 
+from .process_capability import build_process_capability
+from .processes import (
+    LocalProcessService,
+    ProcessCommandDeniedError,
+    ProcessFilter,
+    ProcessHandle,
+    ProcessInputError,
+    ProcessMonitorRecord,
+    ProcessMonitorStore,
+    ProcessNotFoundError,
+    ProcessOutputSink,
+    ProcessReaction,
+    ProcessReactionRouter,
+    ProcessResult,
+    ProcessServiceError,
+)
+
 _DENIED_ENV_PATTERNS = (*LLM_API_KEY_ENV_PATTERNS, "AZURE_OPENAI_*")
+
+__all__ = [
+    "LocalProcessService",
+    "build_process_capability",
+    "ProcessCommandDeniedError",
+    "ProcessFilter",
+    "ProcessHandle",
+    "ProcessInputError",
+    "ProcessMonitorRecord",
+    "ProcessMonitorStore",
+    "ProcessNotFoundError",
+    "ProcessReaction",
+    "ProcessReactionRouter",
+    "ProcessOutputSink",
+    "ProcessResult",
+    "ProcessServiceError",
+    "Workspace",
+    "WorkspaceDeps",
+]
 
 
 class WorkspaceDeps(Protocol):
