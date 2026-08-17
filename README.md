@@ -51,6 +51,8 @@ The host supplies the workspace path through dependencies. AgentSpec cannot sele
 
 For a durable deep-coding composition, install `yolop[deep]` and load the explicit preset with `yolop_deep.load_deep_coding_spec()`. The preset includes Workspace, context controls, subtasks and dependencies, and session-scoped planning. Its capability selections are validated against the installed ProviderCatalog; storage paths are always host-owned.
 
+Use `yolop_deep.GoalRunner` for bounded autonomous continuation. It stores goal state in the RuntimeStore, evaluates only persisted transcript evidence, and represents evaluator and continuation work as normal related Runs. Set a request/token budget, wall deadline, and maximum turns; goal state survives a process restart.
+
 The API key is not part of AgentSpec. Pydantic AI reads `OPENAI_API_KEY` from the environment. An Azure AgentSpec can use `azure:<deployment-name>` with `AZURE_OPENAI_API_KEY` and `AZURE_OPENAI_ENDPOINT`. Legacy Azure endpoints also need `OPENAI_API_VERSION`.
 
 ## Run the terminal host
