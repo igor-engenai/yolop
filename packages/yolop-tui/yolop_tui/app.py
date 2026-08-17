@@ -181,7 +181,10 @@ async def run_tui[DepsT](
                     tree = await runtime.list_run_tree(namespace, session_id=session.id)
                     options = _run_history_options(tree)
                     if not options:
-                        transcript.add_notice("No terminal Runs in this Session")
+                        transcript.add_notice(
+                            "No terminal Runs in this Session; "
+                            "use /resume to open another saved Session"
+                        )
                     else:
                         selected = await terminal.choose(
                             options,

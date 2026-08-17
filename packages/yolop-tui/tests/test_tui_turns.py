@@ -885,7 +885,10 @@ async def test_history_command_handles_empty_session(tmp_path: Path) -> None:
             )
             await _wait_for_output(output, "╭─ prompt")
             pipe_input.send_text("/history\r")
-            await _wait_for_output(output, "No terminal Runs in this Session")
+            await _wait_for_output(
+                output,
+                "No terminal Runs in this Session; use /resume to open another saved Session",
+            )
             pipe_input.send_text("/quit\r")
             await asyncio.wait_for(running, timeout=1)
 
