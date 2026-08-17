@@ -24,6 +24,8 @@ from yolop_runtime import (
 
 from yolop import ProviderCatalog
 
+from .goals import GoalRecord, GoalRunner, GoalStatus, GoalStore, GoalVerdict
+
 _PLAN_OWNER = "yolop.deep.planning"
 _PLAN_STATE_KIND = "plan"
 _PLAN_SCHEMA_VERSION = 1
@@ -168,6 +170,11 @@ def load_deep_coding_spec(*, catalog: ProviderCatalog | None = None) -> AgentSpe
 
 
 __all__ = [
+    "GoalRecord",
+    "GoalRunner",
+    "GoalStatus",
+    "GoalStore",
+    "GoalVerdict",
     "PlanItem",
     "PlanStore",
     "Planning",

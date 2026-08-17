@@ -40,6 +40,7 @@ from . import (
     RuntimeStore,
     ScopedStateContext,
     SessionLockTimeoutError,
+    SessionPinMismatchError,
     canonical_turn_messages,
     ensure_session_pin,
 )
@@ -175,6 +176,7 @@ class Runtime[HostDepsT]:
         spec: AgentSpec | dict[str, Any],
         model: Model | KnownModelName | str | None = None,
         model_id: str | None = None,
+        execution_pin: ExecutionPin | None = None,
         root_budget: RuntimeBudget | None = None,
         parent_run_id: str | None = None,
         relation: RunRelation | None = None,
@@ -186,9 +188,10 @@ class Runtime[HostDepsT]:
         self.kernel.provider_catalog.validate_spec(spec)
         resolved_model_id = _model_id(spec, model=model, model_id=model_id)
         session = await self.store.load_session(namespace, session_id)
-        ensure_session_pin(
+        _ensure_execution_pin(
             session,
             ExecutionPin.from_spec(spec, model_id=resolved_model_id),
+            execution_pin,
         )
         prompt_text = _prompt_text(prompt)
         effective_parent_id = parent_run_id or session.head_run_id
@@ -249,6 +252,7 @@ class Runtime[HostDepsT]:
         spec: AgentSpec | dict[str, Any],
         model: Model | KnownModelName | str | None = None,
         model_id: str | None = None,
+        execution_pin: ExecutionPin | None = None,
         usage_limits: UsageLimits | None = None,
         root_budget: RuntimeBudget | None = None,
         parent_run_id: str | None = None,
@@ -270,6 +274,7 @@ class Runtime[HostDepsT]:
             spec=spec,
             model=model,
             model_id=model_id,
+            execution_pin=execution_pin,
             root_budget=root_budget,
             parent_run_id=parent_run_id,
             relation=relation,
@@ -297,6 +302,7 @@ class Runtime[HostDepsT]:
             spec=spec,
             model=model,
             model_id=model_id,
+            execution_pin=execution_pin,
             deps=deps,
             deps_type=deps_type,
             usage_limits=usage_limits,
@@ -314,6 +320,7 @@ class Runtime[HostDepsT]:
         spec: AgentSpec | dict[str, Any],
         model: Model | KnownModelName | str | None = None,
         model_id: str | None = None,
+        execution_pin: ExecutionPin | None = None,
         deps: HostDepsT,
         deps_type: type[HostDepsT],
         usage_limits: UsageLimits | None = None,
@@ -328,9 +335,10 @@ class Runtime[HostDepsT]:
         self.kernel.provider_catalog.validate_spec(spec)
         resolved_model_id = _model_id(spec, model=model, model_id=model_id)
         session = await self.store.load_session(namespace, claimed.session_id)
-        ensure_session_pin(
+        _ensure_execution_pin(
             session,
             ExecutionPin.from_spec(spec, model_id=resolved_model_id),
+            execution_pin,
         )
         parent = (
             await self.store.load_run(namespace, claimed.parent_run_id)
@@ -382,9 +390,10 @@ class Runtime[HostDepsT]:
                     if latest_parent.status in _TERMINAL_STATUSES:
                         base_full_messages = list(latest_parent.full_messages)
                         base_active_messages = list(latest_parent.active_messages)
-                ensure_session_pin(
+                _ensure_execution_pin(
                     current,
                     ExecutionPin.from_spec(spec, model_id=resolved_model_id),
+                    execution_pin,
                 )
                 try:
                     execute = self.kernel.execute(
@@ -642,6 +651,17 @@ def _event_handler(
             )
 
     return handle
+
+
+def _ensure_execution_pin(
+    session: RuntimeSessionSnapshot,
+    expected: ExecutionPin,
+    alternate: ExecutionPin | None,
+) -> None:
+    if alternate is None:
+        ensure_session_pin(session, expected)
+    elif alternate != expected:
+        raise SessionPinMismatchError("The alternate execution pin does not match the AgentSpec")
 
 
 def _resolve_compaction_model(
