@@ -84,6 +84,10 @@ class GoalStore:
         records = await self._read()
         return records.get(goal_id)
 
+    async def list_records(self) -> list[GoalRecord]:
+        records = await self._read()
+        return list(records.values())
+
     async def put(self, record: GoalRecord) -> GoalRecord:
         records = await self._read()
         records[record.goal_id] = record.model_copy(deep=True)
@@ -205,6 +209,10 @@ class GoalRunner:
     async def get(self, namespace: str, session_id: str, goal_id: str) -> GoalRecord | None:
         store = await self._store(namespace, session_id, goal_id)
         return await store.get(goal_id)
+
+    async def list_goals(self, namespace: str, session_id: str) -> list[GoalRecord]:
+        store = await self._store(namespace, session_id, str(uuid4()))
+        return await store.list_records()
 
     async def stop(
         self, namespace: str, session_id: str, goal_id: str, *, reason: str = "stopped"

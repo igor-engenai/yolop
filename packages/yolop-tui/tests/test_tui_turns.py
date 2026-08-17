@@ -802,8 +802,9 @@ async def test_help_lists_only_the_minimal_commands(tmp_path: Path) -> None:
             pipe_input.send_text("/help\r")
             await _wait_for_output(
                 output,
-                "Commands: /new  /resume  /compact [focus]  /login  /logout  /help  /quit",
+                "Commands: /new  /resume  /compact [focus]  /goal <condition>",
             )
+            await _wait_for_output(output, "/goal-status")
             await _wait_for_output(output, "Scroll: PageUp/PageDown or mouse wheel")
             pipe_input.send_text("/quit\r")
             await asyncio.wait_for(running, timeout=1)
@@ -850,6 +851,30 @@ async def test_compact_command_uses_the_selected_runtime_capability(tmp_path: Pa
             await _wait_for_output(output, "╭─ prompt")
             pipe_input.send_text("/compact keep {braces}\r")
             await _wait_for_output(output, "Session context compacted")
+            pipe_input.send_text("/quit\r")
+            await asyncio.wait_for(running, timeout=1)
+
+
+async def test_goal_status_reports_when_no_goal_is_selected(tmp_path: Path) -> None:
+    output = CapturingOutput()
+    store = SQLiteRuntimeStore(tmp_path / "runtime.db")
+    with create_pipe_input() as pipe_input:
+        with create_app_session(input=pipe_input, output=output):
+            running = asyncio.create_task(
+                run_tui(
+                    AgentSpec(),
+                    store=store,
+                    namespace="test",
+                    deps=None,
+                    deps_type=type(None),
+                    model="test:model",
+                    model_id="test:model",
+                    cwd=tmp_path,
+                )
+            )
+            await _wait_for_output(output, "╭─ prompt")
+            pipe_input.send_text("/goal-status\r")
+            await _wait_for_output(output, "Goal command failed: No goal is selected")
             pipe_input.send_text("/quit\r")
             await asyncio.wait_for(running, timeout=1)
 

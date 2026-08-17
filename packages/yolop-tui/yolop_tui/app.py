@@ -44,7 +44,8 @@ _PROVIDER_INSTALL_HINT = (
     'No authentication providers are installed. Install with `uv add "yolop[tui,providers]"`.'
 )
 _HELP_TEXT = (
-    "Commands: /new  /resume  /compact [focus]  /login  /logout  /help  /quit\n"
+    "Commands: /new  /resume  /compact [focus]  /goal <condition>  "
+    "/goal-status  /goal-stop  /goal-resume  /login  /logout  /help  /quit\n"
     "Scroll: PageUp/PageDown or mouse wheel · End: newest output"
 )
 
@@ -77,6 +78,7 @@ async def run_tui[DepsT](
     auth_providers: tuple[AuthProvider, ...] | None = None
     submissions: asyncio.Queue[str] = asyncio.Queue()
     active_turn: _ActiveTurn | None = None
+    active_goal_id: str | None = None
     auth_state: str | None = None
     terminal: TextualTerminal
 
@@ -139,7 +141,7 @@ async def run_tui[DepsT](
     refresh_status()
 
     async def control() -> None:
-        nonlocal auth_providers, auth_state, session
+        nonlocal active_goal_id, auth_providers, auth_state, session
         while True:
             text = await submissions.get()
             command = text.strip()
@@ -171,6 +173,113 @@ async def run_tui[DepsT](
             if command == "/help":
                 transcript.add_notice(_HELP_TEXT)
                 render_transcript()
+                continue
+            if command == "/goal" or command.startswith("/goal "):
+                condition = text.strip()[len("/goal") :].strip()
+                if not condition:
+                    transcript.add_error("Usage: /goal <condition>")
+                    render_transcript()
+                    continue
+                try:
+                    from yolop_deep import GoalRunner
+
+                    goal_model = model or pin.model_id
+                    goal_runner = GoalRunner(runtime)
+                    evaluator_spec = AgentSpec(
+                        model=pin.model_id,
+                        name="goal-evaluator",
+                        instructions=(
+                            "Evaluate the goal only from the supplied transcript evidence. "
+                            "Do not call tools. Return met, impossible, or unmet "
+                            "with a concrete reason."
+                        ),
+                        output_schema={
+                            "type": "object",
+                            "properties": {
+                                "verdict": {
+                                    "type": "string",
+                                    "enum": ["met", "impossible", "unmet"],
+                                },
+                                "reason": {"type": "string"},
+                            },
+                            "required": ["verdict", "reason"],
+                        },
+                    )
+                    record = await goal_runner.start(
+                        namespace,
+                        session.id,
+                        goal=condition,
+                        spec=spec,
+                        model=goal_model,
+                        model_id=pin.model_id,
+                        evaluator_spec=evaluator_spec,
+                        evaluator_model=goal_model,
+                        evaluator_model_id=pin.model_id,
+                        deps=deps,
+                        deps_type=deps_type,
+                        max_turns=3,
+                    )
+                except ImportError:
+                    transcript.add_error("Install yolop[deep] to use durable goals")
+                except Exception as error:
+                    transcript.add_error(f"Goal failed: {error}")
+                else:
+                    active_goal_id = record.goal_id
+                    transcript.add_notice(
+                        f"Goal {record.goal_id[:8]}: {record.status.value} "
+                        f"({record.reason or 'running'})"
+                    )
+                render_transcript()
+                refresh_status()
+                focus_editor = getattr(terminal, "focus_editor", None)
+                if callable(focus_editor):
+                    focus_editor()
+                continue
+            if command in {"/goal-status", "/goal-stop", "/goal-resume"}:
+                try:
+                    from yolop_deep import GoalRunner, GoalStatus
+
+                    goal_runner = GoalRunner(runtime)
+                    if active_goal_id is None:
+                        records = await goal_runner.list_goals(namespace, session.id)
+                        active = [
+                            record for record in records if record.status is GoalStatus.ACTIVE
+                        ]
+                        if active:
+                            active_goal_id = active[-1].goal_id
+                    if active_goal_id is None:
+                        raise ValueError("No goal is selected")
+                    if command == "/goal-status":
+                        record = await goal_runner.get(namespace, session.id, active_goal_id)
+                        if record is None:
+                            raise ValueError("Selected goal does not exist")
+                    elif command == "/goal-stop":
+                        record = await goal_runner.stop(namespace, session.id, active_goal_id)
+                    else:
+                        record = await goal_runner.resume(
+                            namespace,
+                            session.id,
+                            active_goal_id,
+                            spec=spec,
+                            model=model or pin.model_id,
+                            model_id=pin.model_id,
+                            evaluator_model=model or pin.model_id,
+                            deps=deps,
+                            deps_type=deps_type,
+                        )
+                    transcript.add_notice(
+                        f"Goal {record.goal_id[:8]}: {record.status.value} "
+                        f"({record.reason or 'running'})"
+                    )
+                except ImportError:
+                    transcript.add_error("Install yolop[deep] to use durable goals")
+                except Exception as error:
+                    transcript.add_error(f"Goal command failed: {error}")
+                render_transcript()
+                refresh_status()
+                focus_editor = getattr(terminal, "focus_editor", None)
+                if callable(focus_editor):
+                    focus_editor()
                 continue
             if command == "/compact" or command.startswith("/compact "):
                 focus = text.strip()[len("/compact") :].strip() or None
