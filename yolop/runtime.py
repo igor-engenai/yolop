@@ -8,6 +8,7 @@ from pydantic_ai.messages import ModelMessage, UserContent
 from pydantic_ai.models import KnownModelName, Model
 
 from .capabilities import load_capability_types
+from .providers import resolve_model_reference
 
 
 class Yolop:
@@ -26,10 +27,11 @@ class Yolop:
     ) -> AgentRunResult[Any]:
         """Run to completion with a native handler that can steer through RunContext."""
         capability_types = load_capability_types(spec)
+        resolved_model = _resolve_model(spec, model)
         agent = Agent.from_spec(
             spec,
             deps_type=deps_type,
-            model=model,
+            model=resolved_model,
             custom_capability_types=capability_types,
         )
         return await agent.run(
@@ -50,10 +52,25 @@ class Yolop:
         message_history: Sequence[ModelMessage] | None = None,
     ) -> AbstractAsyncContextManager[AgentRunEvents[Any]]:
         capability_types = load_capability_types(spec)
+        resolved_model = _resolve_model(spec, model)
         agent = Agent.from_spec(
             spec,
             deps_type=deps_type,
-            model=model,
+            model=resolved_model,
             custom_capability_types=capability_types,
         )
         return agent.run_stream_events(prompt, deps=deps, message_history=message_history)
+
+
+def _resolve_model(
+    spec: AgentSpec | dict[str, Any],
+    model: Model | KnownModelName | str | None,
+) -> Model | KnownModelName | str | None:
+    if isinstance(model, str):
+        return resolve_model_reference(model)
+    if model is not None:
+        return model
+    validated_spec = spec if isinstance(spec, AgentSpec) else AgentSpec.model_validate(spec)
+    if isinstance(validated_spec.model, str):
+        return resolve_model_reference(validated_spec.model)
+    return None
