@@ -86,14 +86,25 @@ class _ImprovementState:
             _IMPROVEMENT_STATE_KIND,
             schema_version=_IMPROVEMENT_SCHEMA_VERSION,
         )
-        if not entries:
-            return _ImprovementSnapshot()
+        proposals: dict[str, ImprovementProposal] = {}
         try:
-            return _ImprovementSnapshot.model_validate(entries[-1].payload)
+            for entry in entries:
+                payload = entry.payload
+                if not isinstance(payload, dict):
+                    raise ValueError("proposal event is not an object")
+                if "proposal" in payload:
+                    proposal = ImprovementProposal.model_validate(payload["proposal"])
+                    proposals[proposal.proposal_id] = proposal
+                elif "proposals" in payload:
+                    legacy = _ImprovementSnapshot.model_validate(payload)
+                    proposals.update(legacy.proposals)
+                else:
+                    raise ValueError("proposal event has no proposal")
         except (TypeError, ValueError) as error:
             raise ImprovementProposalError("Stored improvement state is invalid") from error
+        return _ImprovementSnapshot(proposals=proposals)
 
-    async def write(self, snapshot: _ImprovementSnapshot) -> None:
+    async def write(self, proposal: ImprovementProposal) -> None:
         entries = await self._state.read(
             _IMPROVEMENT_STATE_KIND,
             schema_version=_IMPROVEMENT_SCHEMA_VERSION,
@@ -101,7 +112,7 @@ class _ImprovementState:
         expected_sequence = entries[-1].sequence if entries else 0
         await self._state.append(
             _IMPROVEMENT_STATE_KIND,
-            snapshot.model_dump(mode="json"),
+            {"proposal": proposal.model_dump(mode="json")},
             schema_version=_IMPROVEMENT_SCHEMA_VERSION,
             expected_sequence=expected_sequence,
         )
@@ -168,12 +179,7 @@ class ImprovementProposalService:
         )
         state = _ImprovementState(self.runtime, namespace, session_id, source_run_id)
         async with self.runtime.store.lock_session(namespace, session_id, timeout=30):
-            snapshot = await state.read()
-            await state.write(
-                snapshot.model_copy(
-                    update={"proposals": {**snapshot.proposals, proposal.proposal_id: proposal}}
-                )
-            )
+            await state.write(proposal)
         return proposal
 
     async def get(
@@ -221,11 +227,7 @@ class ImprovementProposalService:
             reviewed = current.model_copy(
                 update={"status": status, "revision": current.revision + 1}
             )
-            await state.write(
-                snapshot.model_copy(
-                    update={"proposals": {**snapshot.proposals, proposal_id: reviewed}}
-                )
-            )
+            await state.write(reviewed)
             return reviewed
 
 

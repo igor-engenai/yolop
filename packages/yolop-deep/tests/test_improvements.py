@@ -103,6 +103,29 @@ async def test_improvement_proposal_rejects_cross_namespace_run(tmp_path: Path) 
         )
 
 
+async def test_many_valid_improvement_proposals_do_not_share_one_payload_limit(
+    tmp_path: Path,
+) -> None:
+    runtime, session_id, source_run_id = await setup(tmp_path)
+    service = ImprovementProposalService(
+        runtime,
+        max_patch_chars=12_000,
+        max_evidence_chars=1_000,
+    )
+
+    for index in range(6):
+        await service.propose(
+            "tenant/acme",
+            session_id,
+            source_run_id,
+            target_spec=AgentSpec(name="deep-coding"),
+            summary=f"Improve verification {index}.",
+            patch="Clarify the verification instruction. " + "x" * 11_000,
+        )
+
+    assert len(await service.list_proposals("tenant/acme", session_id, source_run_id)) == 6
+
+
 async def test_improvement_proposal_enforces_payload_limit(tmp_path: Path) -> None:
     runtime, session_id, source_run_id = await setup(tmp_path)
     service = ImprovementProposalService(runtime, max_patch_chars=10)
