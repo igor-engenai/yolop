@@ -13,6 +13,7 @@ members = [
     "yolop",
     "yolop-context",
     "yolop-deep",
+    "yolop-delegation",
     "yolop-duckdb",
     "yolop-http",
     "yolop-mcp",
@@ -1922,6 +1923,7 @@ all = [
     { name = "pydantic-ai-slim", extra = ["openai"] },
     { name = "yolop-context" },
     { name = "yolop-deep" },
+    { name = "yolop-delegation" },
     { name = "yolop-duckdb" },
     { name = "yolop-http" },
     { name = "yolop-mcp" },
@@ -1941,6 +1943,9 @@ context = [
 ]
 deep = [
     { name = "yolop-deep" },
+]
+delegation = [
+    { name = "yolop-delegation" },
 ]
 duckdb = [
     { name = "yolop-duckdb" },
@@ -1986,6 +1991,7 @@ dev = [
     { name = "ty" },
     { name = "yolop-context" },
     { name = "yolop-deep" },
+    { name = "yolop-delegation" },
     { name = "yolop-duckdb" },
     { name = "yolop-http" },
     { name = "yolop-mcp" },
@@ -2011,6 +2017,8 @@ requires-dist = [
     { name = "yolop-context", marker = "extra == 'context'", editable = "packages/yolop-context" },
     { name = "yolop-deep", marker = "extra == 'all'", editable = "packages/yolop-deep" },
     { name = "yolop-deep", marker = "extra == 'deep'", editable = "packages/yolop-deep" },
+    { name = "yolop-delegation", marker = "extra == 'all'", editable = "packages/yolop-delegation" },
+    { name = "yolop-delegation", marker = "extra == 'delegation'", editable = "packages/yolop-delegation" },
     { name = "yolop-duckdb", marker = "extra == 'all'", editable = "packages/yolop-duckdb" },
     { name = "yolop-duckdb", marker = "extra == 'duckdb'", editable = "packages/yolop-duckdb" },
     { name = "yolop-http", marker = "extra == 'all'", editable = "packages/yolop-http" },
@@ -2035,7 +2043,7 @@ requires-dist = [
     { name = "yolop-workspace", marker = "extra == 'workspace'", editable = "packages/yolop-workspace" },
     { name = "yolop-workspace-session", marker = "extra == 'all'", editable = "packages/yolop-workspace-session" },
 ]
-provides-extras = ["workspace", "context", "deep", "duckdb", "http", "mcp", "openapi", "postgres-runtime", "memory", "web", "tui", "openai", "providers", "all"]
+provides-extras = ["workspace", "context", "deep", "delegation", "duckdb", "http", "mcp", "openapi", "postgres-runtime", "memory", "web", "tui", "openai", "providers", "all"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -2047,6 +2055,7 @@ dev = [
     { name = "ty", specifier = ">=0.0.72" },
     { name = "yolop-context", editable = "packages/yolop-context" },
     { name = "yolop-deep", editable = "packages/yolop-deep" },
+    { name = "yolop-delegation", editable = "packages/yolop-delegation" },
     { name = "yolop-duckdb", editable = "packages/yolop-duckdb" },
     { name = "yolop-http", editable = "packages/yolop-http" },
     { name = "yolop-mcp", editable = "packages/yolop-mcp" },
@@ -2096,6 +2105,23 @@ requires-dist = [
     { name = "yolop-context", editable = "packages/yolop-context" },
     { name = "yolop-runtime", editable = "packages/yolop-runtime" },
     { name = "yolop-workspace", editable = "packages/yolop-workspace" },
+]
+
+[[package]]
+name = "yolop-delegation"
+version = "0.1.0"
+source = { editable = "packages/yolop-delegation" }
+dependencies = [
+    { name = "pydantic-ai-slim" },
+    { name = "yolop" },
+    { name = "yolop-runtime" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "pydantic-ai-slim", specifier = ">=2.31.0" },
+    { name = "yolop", editable = "." },
+    { name = "yolop-runtime", editable = "packages/yolop-runtime" },
 ]
 
 [[package]]

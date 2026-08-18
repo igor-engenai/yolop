@@ -13,6 +13,7 @@ import pytest
         ("yolop-http", "yolop_http"),
         ("yolop-openapi", "yolop_openapi"),
         ("yolop-postgres-runtime", "yolop_postgres_runtime"),
+        ("yolop-delegation", "yolop_delegation"),
     ),
 )
 def test_new_wheel_contains_an_isolated_public_package(
@@ -42,4 +43,3 @@ def test_new_wheel_contains_an_isolated_public_package(
         metadata_name = next(name for name in names if name.endswith("/METADATA"))
         metadata = wheel.read(metadata_name).decode()
         assert f"Name: {distribution}" in metadata
-

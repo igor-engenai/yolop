@@ -33,6 +33,7 @@ You can install smaller feature sets instead:
 - `uv add "yolop[openai]"` installs OpenAI API support.
 - `uv add "yolop[providers]"` installs the `yolop-providers` package, including Codex subscription support.
 - `uv add "yolop[deep]"` installs durable planning and the explicit deep-coding capability preset.
+- `uv add "yolop[delegation]"` installs host-authorized immutable delegate AgentSpec resolution.
 
 The feature packages remain separate Python distributions. A package index must contain compatible `0.1.x` releases of each selected YoloP distribution. For development in this repository, use `uv sync --all-packages`.
 
@@ -281,6 +282,10 @@ Process failure leaves an owned Run in durable `INTERRUPTED` state. YoloP does n
 ### `yolop-mcp`
 
 [`packages/yolop-mcp`](packages/yolop-mcp) builds native Pydantic AI MCP toolsets from host-owned stdio and HTTP alias registries. AgentSpec metadata selects aliases and safe narrowing options; the host controls transports, prefixes, timeouts, resource/skill gates, and secret references. Resolved headers and environment values exist only while native MCP connections run.
+
+### `yolop-delegation`
+
+[`packages/yolop-delegation`](packages/yolop-delegation) provides a namespace-partitioned host catalog of immutable delegate AgentSpecs. Parent AgentSpecs select aliases and tighter bounded limits; the catalog pins each delegate's AgentSpec digest, version, and model identity before later Runtime delegation. It does not create child Runs or execute model calls.
 
 ### `yolop-memory`
 

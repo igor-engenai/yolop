@@ -17,6 +17,7 @@ dependencies = [
 workspace = ["yolop-workspace>=0.1.0,<0.2.0"]
 context = ["yolop-context>=0.1.0,<0.2.0"]
 deep = ["yolop-deep>=0.1.0,<0.2.0"]
+delegation = ["yolop-delegation>=0.1.0,<0.2.0"]
 duckdb = ["yolop-duckdb>=0.1.0,<0.2.0"]
 http = ["yolop-http>=0.1.0,<0.2.0"]
 mcp = ["yolop-mcp>=0.1.0,<0.2.0"]
@@ -32,6 +33,7 @@ all = [
     "yolop-context>=0.1.0,<0.2.0",
     "yolop-http>=0.1.0,<0.2.0",
     "yolop-deep>=0.1.0,<0.2.0",
+    "yolop-delegation>=0.1.0,<0.2.0",
     "yolop-duckdb>=0.1.0,<0.2.0",
     "yolop-mcp>=0.1.0,<0.2.0",
     "yolop-memory>=0.1.0,<0.2.0",
@@ -60,6 +62,7 @@ dev = [
     "ty>=0.0.72",
     "yolop-context",
     "yolop-deep",
+    "yolop-delegation",
     "yolop-duckdb",
     "yolop-mcp",
     "yolop-memory",
@@ -82,6 +85,7 @@ package = true
 yolop = { workspace = true }
 yolop-context = { workspace = true }
 yolop-deep = { workspace = true }
+yolop-delegation = { workspace = true }
 yolop-duckdb = { workspace = true }
 yolop-mcp = { workspace = true }
 yolop-memory = { workspace = true }
@@ -100,6 +104,7 @@ yolop-workspace-session = { workspace = true }
 members = [
     "packages/yolop-context",
     "packages/yolop-deep",
+    "packages/yolop-delegation",
     "packages/yolop-duckdb",
     "packages/yolop-mcp",
     "packages/yolop-memory",
@@ -122,6 +127,7 @@ testpaths = [
     "tests",
     "packages/yolop-context/tests",
     "packages/yolop-deep/tests",
+    "packages/yolop-delegation/tests",
     "packages/yolop-duckdb/tests",
     "packages/yolop-mcp/tests",
     "packages/yolop-memory/tests",
