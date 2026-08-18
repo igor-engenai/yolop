@@ -99,6 +99,7 @@ def test_public_package_imports_load() -> None:
         "yolop_deep": (
             "ChannelMessage",
             "DelegatedTaskCoordinator",
+            "ForkCandidateService",
             "PlanItem",
             "Planning",
             "SessionPlanStore",

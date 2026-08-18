@@ -24,6 +24,14 @@ from yolop_runtime import (
 
 from yolop import ProviderCatalog
 
+from .forks import (
+    CandidateConflictError,
+    CandidateLimitError,
+    CandidateNotFoundError,
+    ForkCandidateHandle,
+    ForkCandidateService,
+    ForkCandidateStatus,
+)
 from .goals import GoalRecord, GoalRunner, GoalStatus, GoalStore, GoalVerdict
 
 _PLAN_OWNER = "yolop.deep.planning"
@@ -181,6 +189,12 @@ def load_deep_coding_spec(*, catalog: ProviderCatalog | None = None) -> AgentSpe
 
 
 __all__ = [
+    "CandidateConflictError",
+    "CandidateLimitError",
+    "CandidateNotFoundError",
+    "ForkCandidateHandle",
+    "ForkCandidateService",
+    "ForkCandidateStatus",
     "GoalRecord",
     "GoalRunner",
     "GoalStatus",
