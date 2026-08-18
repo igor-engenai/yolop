@@ -240,6 +240,12 @@ class Runtime[HostDepsT]:
             if parent is None
             else RunRelation.CONTINUATION
         )
+        if (
+            parent is not None
+            and parent.session_id != session.id
+            and effective_relation is not RunRelation.CHILD
+        ):
+            raise RunStateError(f"Parent Run {parent.id!r} belongs to another Session")
         if effective_relation is RunRelation.ROOT and parent is not None:
             raise RunStateError("A root Run cannot have an ancestor")
         if effective_relation is not RunRelation.ROOT and parent is None:

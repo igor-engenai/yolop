@@ -505,6 +505,15 @@ class PostgresRunOperations:
                     parent_row = await parent_cursor.fetchone()
                     if parent_row is None:
                         raise RunNotFoundError(f"Parent Run {validated_parent_id!r} does not exist")
+                    if (
+                        parent_row[0] != session_uuid
+                        and validated_relation is not RunRelation.CHILD
+                    ):
+                        from yolop_runtime import RunStateError
+
+                        raise RunStateError(
+                            f"Parent Run {validated_parent_id!r} belongs to another Session"
+                        )
                     effective_root_id = parent_row[1]
                     if validated_root_id is not None and validated_root_id != str(
                         effective_root_id

@@ -149,6 +149,16 @@ class RuntimeStoreContract:
         assert child.run.parent_run_id == parent.run.id
         assert child.run.root_run_id == parent.run.id
 
+        with raises(RunStateError, match="another Session"):
+            await store.reserve_run(
+                "tenant/acme",
+                child_session.id,
+                idempotency_key="continuation-cross-session",
+                prompt="Continue",
+                parent_run_id=parent.run.id,
+                relation=RunRelation.CONTINUATION,
+            )
+
     async def test_idempotency_key_is_bound_to_run_initiator(self, tmp_path: Path) -> None:
         store = await self.make_store(tmp_path / "runtime.db")
         session = await store.create_session(

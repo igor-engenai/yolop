@@ -787,6 +787,10 @@ class SQLiteRuntimeStore:
                 ).fetchone()
                 if parent_row is None:
                     raise RunNotFoundError(f"Parent Run {parent_run_id!r} does not exist")
+                if parent_row[0] != validated_id and relation is not RunRelation.CHILD:
+                    raise RunStateError(
+                        f"Parent Run {parent_run_id!r} belongs to another Session"
+                    )
                 parent_root_run_id = parent_row[1] or parent_run_id
                 assert parent_root_run_id is not None
                 if root_run_id is not None and root_run_id != parent_root_run_id:
