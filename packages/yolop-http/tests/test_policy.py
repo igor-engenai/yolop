@@ -1,6 +1,13 @@
+from importlib.metadata import requires
 from ipaddress import IPv4Address
 
 from yolop_http import EgressPolicy, validate_destination
+
+
+def test_http_distribution_declares_pydantic_ai() -> None:
+    dependencies = requires("yolop-http") or []
+
+    assert any(dependency.startswith("pydantic-ai-slim") for dependency in dependencies)
 
 
 def test_egress_policy_rejects_private_and_metadata_addresses() -> None:

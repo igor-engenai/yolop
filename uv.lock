@@ -2120,12 +2120,14 @@ source = { editable = "packages/yolop-http" }
 dependencies = [
     { name = "httpcore" },
     { name = "httpx" },
+    { name = "pydantic-ai-slim" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "httpcore", specifier = ">=1.0.9" },
     { name = "httpx", specifier = ">=0.28.1" },
+    { name = "pydantic-ai-slim", specifier = ">=2.31.0" },
 ]
 
 [[package]]
