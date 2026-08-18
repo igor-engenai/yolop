@@ -742,7 +742,13 @@ class SQLiteRuntimeStore:
             ).fetchone()
             if row is not None:
                 run = _runtime_run(row, connection=connection)
-                if run.prompt != prompt or run.input_digest != run_input_digest:
+                if (
+                    run.prompt != prompt
+                    or run.input_digest != run_input_digest
+                    or run.parent_run_id != parent_run_id
+                    or run.relation is not relation
+                    or run.initiator != initiator
+                ):
                     raise IdempotencyConflictError(
                         f"Idempotency key {idempotency_key!r} has different input"
                     )

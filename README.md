@@ -267,7 +267,7 @@ Hosts can resolve immutable skill libraries with `resolve_skill_libraries(...)`.
 
 [`packages/yolop-runtime`](packages/yolop-runtime) provides the host-neutral durable `Runtime` facade and one storage-independent `RuntimeStore` protocol. It owns namespaced session and run values, execution scopes and pins, durable event values, stable errors, generated identity helpers, and generic runtime dependencies. It depends on the core `yolop` kernel, but not on SQLite or host frameworks.
 
-Process failure leaves an owned Run in durable `INTERRUPTED` state. YoloP does not retry automatically. Hosts can call `Runtime.retry_interrupted_run(...)` to create one explicit, idempotent continuation from the committed parent checkpoint.
+Process failure leaves an owned Run in durable `INTERRUPTED` state. YoloP does not retry automatically. Hosts can call `Runtime.retry_interrupted_run(...)` with the original string or structured prompt to create one explicit, idempotent continuation from the committed parent checkpoint.
 
 ### `yolop-sqlite-session`
 

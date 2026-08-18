@@ -6,6 +6,7 @@ from pydantic_ai.usage import RunUsage
 from pytest import raises
 from yolop_runtime import (
     ExecutionPin,
+    IdempotencyConflictError,
     RunBudgetExceededError,
     RunRelation,
     RunReservation,
@@ -47,6 +48,99 @@ class RuntimeStoreContract:
         assert first.run.id == second.run.id
         assert sorted((first.created, second.created)) == [False, True]
         assert first.run.status is RunStatus.ACCEPTED
+
+    async def test_idempotency_key_is_bound_to_parent_run(self, tmp_path: Path) -> None:
+        store = await self.make_store(tmp_path / "runtime.db")
+        session = await store.create_session(
+            "tenant/acme",
+            pin=ExecutionPin(agent_spec_id="a" * 64, model_id="openai:model"),
+        )
+        first_parent = await store.reserve_run(
+            "tenant/acme",
+            session.id,
+            idempotency_key="first-parent",
+            prompt="First",
+        )
+        second_parent = await store.reserve_run(
+            "tenant/acme",
+            session.id,
+            idempotency_key="second-parent",
+            prompt="Second",
+        )
+        await store.reserve_run(
+            "tenant/acme",
+            session.id,
+            idempotency_key="continuation",
+            prompt="",
+            parent_run_id=first_parent.run.id,
+            relation=RunRelation.CONTINUATION,
+            input_digest="same-input",
+        )
+
+        with raises(IdempotencyConflictError):
+            await store.reserve_run(
+                "tenant/acme",
+                session.id,
+                idempotency_key="continuation",
+                prompt="",
+                parent_run_id=second_parent.run.id,
+                relation=RunRelation.CONTINUATION,
+                input_digest="same-input",
+            )
+
+    async def test_idempotency_key_is_bound_to_run_relation(self, tmp_path: Path) -> None:
+        store = await self.make_store(tmp_path / "runtime.db")
+        session = await store.create_session(
+            "tenant/acme",
+            pin=ExecutionPin(agent_spec_id="a" * 64, model_id="openai:model"),
+        )
+        parent = await store.reserve_run(
+            "tenant/acme",
+            session.id,
+            idempotency_key="parent",
+            prompt="Parent",
+        )
+        await store.reserve_run(
+            "tenant/acme",
+            session.id,
+            idempotency_key="related",
+            prompt="Related",
+            parent_run_id=parent.run.id,
+            relation=RunRelation.CHILD,
+        )
+
+        with raises(IdempotencyConflictError):
+            await store.reserve_run(
+                "tenant/acme",
+                session.id,
+                idempotency_key="related",
+                prompt="Related",
+                parent_run_id=parent.run.id,
+                relation=RunRelation.CONTINUATION,
+            )
+
+    async def test_idempotency_key_is_bound_to_run_initiator(self, tmp_path: Path) -> None:
+        store = await self.make_store(tmp_path / "runtime.db")
+        session = await store.create_session(
+            "tenant/acme",
+            pin=ExecutionPin(agent_spec_id="a" * 64, model_id="openai:model"),
+        )
+        await store.reserve_run(
+            "tenant/acme",
+            session.id,
+            idempotency_key="request",
+            prompt="Run",
+            initiator="user",
+        )
+
+        with raises(IdempotencyConflictError):
+            await store.reserve_run(
+                "tenant/acme",
+                session.id,
+                idempotency_key="request",
+                prompt="Run",
+                initiator="goal-evaluator",
+            )
 
     async def test_sessions_are_isolated_by_namespace(self, tmp_path: Path) -> None:
         store = await self.make_store(tmp_path / "runtime.db")

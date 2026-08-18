@@ -43,6 +43,24 @@ class Sink:
         self.events.append(event.event_kind)
 
 
+def test_sparse_policy_uses_current_semantic_event_kinds() -> None:
+    policy = SparseEventPersistencePolicy()
+
+    for event_kind in (
+        "deferred_tool_requests",
+        "deferred_tool_results",
+        "final_result",
+        "function_tool_call",
+        "function_tool_result",
+        "output_tool_call",
+        "output_tool_result",
+        "part_start",
+        "part_end",
+    ):
+        assert policy.should_persist(cast(Any, Event(event_kind)))
+    assert not policy.should_persist(cast(Any, Event("part_delta")))
+
+
 @pytest.mark.asyncio
 async def test_sparse_policy_keeps_live_events_and_persists_semantic_events(
     monkeypatch: pytest.MonkeyPatch,

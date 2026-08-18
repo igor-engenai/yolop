@@ -584,6 +584,7 @@ class Runtime[HostDepsT]:
         namespace: str,
         session_id: str,
         run_id: str,
+        prompt: str | Sequence[UserContent],
         *,
         spec: AgentSpec | dict[str, Any],
         model: Model | KnownModelName | str | None = None,
@@ -607,7 +608,7 @@ class Runtime[HostDepsT]:
         return await self.run_related(
             namespace,
             session_id,
-            None,
+            prompt,
             parent_run_id=run_id,
             relation=RunRelation.CONTINUATION,
             spec=spec,

@@ -2,9 +2,9 @@ from collections.abc import AsyncIterator
 from inspect import signature
 
 from pydantic_ai import AgentSpec
-from pydantic_ai.messages import ModelMessage, ModelRequest, UserPromptPart
+from pydantic_ai.messages import ModelMessage, ModelRequest, TextContent, UserPromptPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
-from pytest import raises
+from pytest import mark, raises
 from yolop_runtime import RunStateError, RunStatus, Runtime
 from yolop_sqlite_session import SQLiteRuntimeStore
 
@@ -14,21 +14,16 @@ def test_runtime_exposes_explicit_interrupted_run_retry() -> None:
     assert "idempotency_key" in signature(Runtime.retry_interrupted_run).parameters
 
 
-async def test_interrupted_run_requires_explicit_idempotent_retry(tmp_path) -> None:
+@mark.parametrize("prompt", ["start", [TextContent("start")]])
+async def test_interrupted_run_requires_explicit_idempotent_retry(tmp_path, prompt) -> None:
     store = SQLiteRuntimeStore(tmp_path / "runtime.db")
     runtime = Runtime(store=store)
     spec = AgentSpec(model="test:model")
     session = await runtime.create_session("test", spec=spec, model_id="test:model")
-    session = await store.replace_session(
-        "test",
-        session.id,
-        expected_revision=session.revision,
-        messages=[ModelRequest(parts=[UserPromptPart("Start")])],
-    )
     reservation = await runtime.reserve_run(
         "test",
         session.id,
-        "start",
+        prompt,
         spec=spec,
         model_id="test:model",
         idempotency_key="request",
@@ -43,14 +38,21 @@ async def test_interrupted_run_requires_explicit_idempotent_retry(tmp_path) -> N
     assert (await store.load_run("test", claimed.id)).status is RunStatus.INTERRUPTED
 
     async def respond(
-        _messages: list[ModelMessage], _info: AgentInfo
+        messages: list[ModelMessage], _info: AgentInfo
     ) -> AsyncIterator[str]:
+        assert any(
+            isinstance(part, UserPromptPart) and part.content == prompt
+            for message in messages
+            if isinstance(message, ModelRequest)
+            for part in message.parts
+        )
         yield "retried"
 
     resumed = await runtime.retry_interrupted_run(
         "test",
         session.id,
         claimed.id,
+        prompt,
         spec=spec,
         model=FunctionModel(stream_function=respond),
         model_id="test:model",
@@ -65,6 +67,7 @@ async def test_interrupted_run_requires_explicit_idempotent_retry(tmp_path) -> N
             "test",
             session.id,
             resumed.run.id,
+            prompt,
             spec=spec,
             model=FunctionModel(stream_function=respond),
             model_id="test:model",

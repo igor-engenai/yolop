@@ -23,20 +23,25 @@ class AllEventsPersistencePolicy:
 
 _DEFAULT_SEMANTIC_EVENT_KINDS = frozenset(
     {
-        "agent_run_started",
-        "agent_run_result",
-        "builtin_tool_call",
-        "builtin_tool_result",
-        "deferred_tool_call",
-        "deferred_tool_result",
+        "deferred_tool_requests",
+        "deferred_tool_results",
+        "enqueued_messages",
+        "final_result",
         "function_tool_call",
         "function_tool_result",
-        "run_cancelled",
-        "run_completed",
-        "run_failed",
-        "run_interrupted",
-        "tool_call",
-        "tool_result",
+        "output_tool_call",
+        "output_tool_result",
+        "part_end",
+        "part_start",
+        "realtime_input_speech_end",
+        "realtime_input_speech_start",
+        "realtime_input_transcription_error",
+        "realtime_output_speech_end",
+        "realtime_output_speech_start",
+        "realtime_response_interrupted",
+        "realtime_session_error",
+        "realtime_session_reconnect",
+        "realtime_turn_complete",
     }
 )
 
