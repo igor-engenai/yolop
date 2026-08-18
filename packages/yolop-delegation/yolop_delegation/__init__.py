@@ -387,18 +387,38 @@ _EXECUTION_EXPORTS = frozenset(
         "build_delegation_capability",
     }
 )
+_BACKGROUND_EXPORTS = frozenset(
+    {
+        "BackgroundDelegationService",
+        "BackgroundTaskConflictError",
+        "BackgroundTaskHandle",
+        "BackgroundTaskNotActiveError",
+        "BackgroundTaskNotFoundError",
+        "BackgroundTaskStatus",
+    }
+)
 
 
 def __getattr__(name: str) -> Any:
-    if name not in _EXECUTION_EXPORTS:
+    if name in _EXECUTION_EXPORTS:
+        module_name = ".execution"
+    elif name in _BACKGROUND_EXPORTS:
+        module_name = ".background"
+    else:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    execution = importlib.import_module(".execution", __name__)
+    execution = importlib.import_module(module_name, __name__)
     value = getattr(execution, name)
     globals()[name] = value
     return value
 
 
 __all__ = [
+    "BackgroundDelegationService",
+    "BackgroundTaskConflictError",
+    "BackgroundTaskHandle",
+    "BackgroundTaskNotActiveError",
+    "BackgroundTaskNotFoundError",
+    "BackgroundTaskStatus",
     "DelegateAgentSelection",
     "DelegateCatalog",
     "DelegateConfigurationError",

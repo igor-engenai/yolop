@@ -825,8 +825,20 @@ class Runtime[HostDepsT]:
     ):
         return await self.store.list_run_events(namespace, run_id, after=after)
 
-    async def cancel_run(self, namespace: str, run_id: str) -> RuntimeRunSnapshot:
-        return await self.store.cancel_run(namespace, run_id)
+    async def cancel_run(
+        self,
+        namespace: str,
+        run_id: str,
+        *,
+        error_code: str = "run_cancelled",
+        error_detail: str = "Run cancelled",
+    ) -> RuntimeRunSnapshot:
+        return await self.store.cancel_run(
+            namespace,
+            run_id,
+            error_code=error_code,
+            error_detail=error_detail,
+        )
 
     async def checkout(
         self,
