@@ -8,7 +8,7 @@ import httpx
 from pydantic import SecretStr
 from pydantic_ai import Agent, AgentRunResultEvent, AgentSpec, Tool
 from pydantic_ai.exceptions import ModelHTTPError
-from pydantic_ai.messages import ModelResponse, TextPart, ThinkingPart
+from pydantic_ai.messages import CachePoint, ModelResponse, TextPart, ThinkingPart
 from pytest import MonkeyPatch, raises
 from yolop_providers import (
     CodexNotAuthenticatedError,
@@ -85,7 +85,9 @@ async def test_codex_model_uses_oauth_responses_transport_and_native_pydantic_me
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
         oauth = CodexOAuth(store=store, now=lambda: 1_000_000_000.0)
         model = create_codex_model("gpt-5.6-luna", oauth=oauth, http_client=client)
-        result = await Agent(model, model_settings={"thinking": "high"}).run("Hello Codex")
+        result = await Agent(model, model_settings={"thinking": "high"}).run(
+            ["Hello Codex", CachePoint()]
+        )
 
     assert result.output == "Codex works"
     assert result.usage.input_tokens == 10
@@ -106,6 +108,7 @@ async def test_codex_model_uses_oauth_responses_transport_and_native_pydantic_me
     assert body["reasoning"]["effort"] == "high"
     assert body["reasoning"]["summary"] == "auto"
     assert body["include"] == ["reasoning.encrypted_content"]
+    assert "prompt_cache_breakpoint" not in request.content.decode()
 
 
 async def test_codex_model_streams_native_thinking_text_and_usage(tmp_path: Path) -> None:

@@ -8,6 +8,7 @@ from pydantic_ai.models.openai import (
     OpenAIResponsesModel,
     OpenAIResponsesModelSettings,
 )
+from pydantic_ai.profiles.openai import OpenAIModelProfile
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from .codex import CodexNotAuthenticatedError, CodexOAuth
@@ -109,6 +110,7 @@ def create_codex_model(
     return OpenAIResponsesModel(
         cast(OpenAIModelName, model_name),
         provider=provider,
+        profile=OpenAIModelProfile(openai_supports_prompt_cache_breakpoints=False),
         settings=settings,
     )
 
