@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from importlib.resources import as_file, files
+from pathlib import Path
 from typing import Any, Literal
 
 from pydantic_ai import AgentSpec
@@ -47,6 +47,7 @@ from .judging import (
     CandidateJudgeService,
     CandidateJudgment,
     CandidateVerdict,
+    CandidateVerdictSet,
 )
 from .workspaces import (
     CandidateWorkspaceHandle,
@@ -216,8 +217,10 @@ def _load_preset(
     *,
     catalog: ProviderCatalog | None,
 ) -> AgentSpec:
-    with as_file(files("yolop_deep").joinpath("agent_specs", filename)) as path:
-        spec = AgentSpec.from_file(path)
+    path = Path.cwd() / "examples" / "agents" / filename
+    if not path.is_file():
+        path = Path(__file__).resolve().parents[3] / "examples" / "agents" / filename
+    spec = AgentSpec.from_file(path)
     (catalog or ProviderCatalog.from_installed()).capability_types_for(spec)
     return spec
 
@@ -233,6 +236,7 @@ __all__ = [
     "CandidateWorkspaceHandle",
     "CandidateWorkspaceLimitError",
     "CandidateVerdict",
+    "CandidateVerdictSet",
     "CandidateWorkspaceService",
     "ForkCandidateHandle",
     "ForkCandidateService",

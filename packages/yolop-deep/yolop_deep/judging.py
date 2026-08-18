@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any, Literal
@@ -14,6 +15,7 @@ from yolop_runtime import (
     RunRelation,
     RunStatus,
     Runtime,
+    RuntimeRunSnapshot,
     RuntimeSessionSnapshot,
     ScopedStateContext,
 )
@@ -38,12 +40,21 @@ class CandidateAcceptanceError(ValueError):
 
 
 class CandidateVerdict(BaseModel):
-    """Bounded evaluator output."""
+    """One bounded evaluator decision for one candidate."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    candidate_key: str = Field(min_length=1, max_length=255)
     verdict: Literal["accept", "reject"]
     reason: str = Field(default="", max_length=2048)
+
+
+class CandidateVerdictSet(BaseModel):
+    """Evaluator output containing one decision for every requested candidate."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    judgments: tuple[CandidateVerdict, ...] = Field(min_length=1)
 
 
 class CandidateJudgment(BaseModel):
@@ -64,6 +75,7 @@ class _JudgmentSnapshot(BaseModel):
 
     judgments: dict[str, CandidateJudgment] = Field(default_factory=dict)
     accepted_candidate_key: str | None = None
+    accepted_source_revision: str | None = None
 
 
 class _JudgmentState:
@@ -73,7 +85,7 @@ class _JudgmentState:
             namespace=namespace,
             session_id=session_id,
             run_id=run_id,
-        ).for_session(_JUDGING_OWNER)
+        ).for_run(_JUDGING_OWNER)
 
     async def read(self) -> _JudgmentSnapshot:
         entries = await self._state.read(
@@ -116,6 +128,7 @@ class CandidateJudgeService:
         self.candidates = candidates
         self.cleanup_candidate = cleanup_candidate
         self.max_evidence_bytes = max_evidence_bytes
+        self._evaluation_locks: dict[str, asyncio.Lock] = {}
 
     async def judge(
         self,
@@ -149,54 +162,68 @@ class CandidateJudgeService:
             selected.append(handle)
         source = await self.runtime.load_session(namespace, source_session_id)
         state = _JudgmentState(self.runtime, namespace, source_session_id, source_run_id)
-        existing = await state.read()
-        if all(key in existing.judgments for key in keys):
-            return tuple(existing.judgments[key] for key in keys)
-        evidence = _bounded_evidence(selected, self.max_evidence_bytes)
-        validated_evaluator = (
-            evaluator_spec
-            if isinstance(evaluator_spec, AgentSpec)
-            else AgentSpec.model_validate(evaluator_spec)
-        )
-        evaluator_session = await self.runtime.create_session(
-            namespace,
-            spec=validated_evaluator,
-            model_id=evaluator_model_id,
-        )
-        completion = await self.runtime.run(
-            namespace,
-            evaluator_session.id,
-            evidence,
-            spec=validated_evaluator,
-            model=evaluator_model,
-            model_id=evaluator_model_id,
-            deps=deps,
-            deps_type=deps_type,
-            output_type=CandidateVerdict,
-            parent_run_id=source_run_id,
-            relation=RunRelation.CHILD,
-            idempotency_key=bounded_idempotency_key("judge", source_run_id, *keys),
-            initiator="fork_judge",
-        )
-        verdict = CandidateVerdict.model_validate(completion.run.output)
-        judgments = tuple(
-            CandidateJudgment(
-                candidate_key=key,
-                verdict=verdict.verdict,
-                reason=verdict.reason,
-                evaluator_session_id=evaluator_session.id,
-                evaluator_run_id=completion.run.id,
-                source_revision=source.revision,
+        evaluation_key = bounded_idempotency_key("judge", source_run_id, *keys)
+        lock = self._evaluation_locks.setdefault(evaluation_key, asyncio.Lock())
+        async with lock:
+            existing = await state.read()
+            if all(key in existing.judgments for key in keys):
+                return tuple(existing.judgments[key] for key in keys)
+            evidence = _bounded_evidence(selected, self.max_evidence_bytes)
+            evaluator_run = await _find_evaluator_run(
+                self.runtime,
+                namespace,
+                evaluation_key,
+                parent_run_id=source_run_id,
             )
-            for key in keys
-        )
-        async with self.runtime.store.lock_session(namespace, source_session_id, timeout=30):
+            if evaluator_run is not None:
+                if evaluator_run.status is not RunStatus.COMPLETED:
+                    raise CandidateJudgeError("The evaluator Run is not completed")
+            else:
+                validated_evaluator = (
+                    evaluator_spec
+                    if isinstance(evaluator_spec, AgentSpec)
+                    else AgentSpec.model_validate(evaluator_spec)
+                )
+                evaluator_session = await self.runtime.create_session(
+                    namespace,
+                    spec=validated_evaluator,
+                    model_id=evaluator_model_id,
+                )
+                completion = await self.runtime.run(
+                    namespace,
+                    evaluator_session.id,
+                    evidence,
+                    spec=validated_evaluator,
+                    model=evaluator_model,
+                    model_id=evaluator_model_id,
+                    deps=deps,
+                    deps_type=deps_type,
+                    output_type=CandidateVerdictSet,
+                    parent_run_id=source_run_id,
+                    relation=RunRelation.CHILD,
+                    idempotency_key=evaluation_key,
+                    initiator="fork_judge",
+                )
+                evaluator_run = completion.run
+            verdicts = _verdicts_for_keys(evaluator_run.output, keys)
+            judgments = tuple(
+                CandidateJudgment(
+                    candidate_key=key,
+                    verdict=verdicts[key].verdict,
+                    reason=verdicts[key].reason,
+                    evaluator_session_id=evaluator_run.session_id,
+                    evaluator_run_id=evaluator_run.id,
+                    source_revision=source.revision,
+                )
+                for key in keys
+            )
             current = await state.read()
             merged = {**current.judgments, **{item.candidate_key: item for item in judgments}}
             await state.write(current.model_copy(update={"judgments": merged}))
-        if verdict.verdict == "reject" and self.cleanup_candidate is not None:
-            for handle in selected:
-                await self.cleanup_candidate(handle)
+        if self.cleanup_candidate is not None:
+            for handle, judgment in zip(selected, judgments, strict=True):
+                if judgment.verdict == "reject":
+                    await self.cleanup_candidate(handle)
         return judgments
 
     async def accept(
@@ -217,8 +244,6 @@ class CandidateJudgeService:
             if snapshot.accepted_candidate_key not in {None, candidate_key}:
                 raise CandidateAcceptanceError("Another candidate has already been accepted")
             source = await self.runtime.load_session(namespace, source_session_id)
-            if source.revision != expected_revision:
-                raise CandidateAcceptanceError("Source Session changed after judging")
             handles = {
                 handle.candidate_key: handle
                 for handle in await self.candidates.list_candidates(
@@ -237,33 +262,80 @@ class CandidateJudgeService:
                 or candidate_run.session_id != handle.candidate_session_id
             ):
                 raise CandidateAcceptanceError("Candidate pin or Session identity does not match")
-            accepted = await self.runtime.store.replace_session(
+            if snapshot.accepted_candidate_key == candidate_key:
+                if source.messages == candidate_run.active_messages:
+                    if source.revision != expected_revision:
+                        raise CandidateAcceptanceError("Source Session revision is stale")
+                    return source
+                if (
+                    source.revision != expected_revision
+                    or snapshot.accepted_source_revision != source.revision
+                ):
+                    raise CandidateAcceptanceError("Source Session changed during acceptance")
+            else:
+                if (
+                    source.revision != expected_revision
+                    or judgment.source_revision != expected_revision
+                ):
+                    raise CandidateAcceptanceError("Source Session changed after judging")
+                await state.write(
+                    snapshot.model_copy(
+                        update={
+                            "accepted_candidate_key": candidate_key,
+                            "accepted_source_revision": source.revision,
+                        }
+                    )
+                )
+            return await self.runtime.store.replace_session(
                 namespace,
                 source_session_id,
-                expected_revision=expected_revision,
+                expected_revision=source.revision,
                 messages=candidate_run.active_messages,
             )
-            await state.write(snapshot.model_copy(update={"accepted_candidate_key": candidate_key}))
-            return accepted
+
+
+async def _find_evaluator_run(
+    runtime: Runtime[Any],
+    namespace: str,
+    idempotency_key: str,
+    *,
+    parent_run_id: str,
+) -> RuntimeRunSnapshot | None:
+    runs = await runtime.list_runs(namespace)
+    return next(
+        (
+            run
+            for run in runs
+            if run.idempotency_key == idempotency_key and run.parent_run_id == parent_run_id
+        ),
+        None,
+    )
+
+
+def _verdicts_for_keys(output: Any, keys: tuple[str, ...]) -> dict[str, CandidateVerdict]:
+    try:
+        verdict_set = CandidateVerdictSet.model_validate(output)
+    except (TypeError, ValueError) as error:
+        raise CandidateJudgeError("Evaluator output is not a candidate verdict set") from error
+    verdicts = {verdict.candidate_key: verdict for verdict in verdict_set.judgments}
+    if set(verdicts) != set(keys) or len(verdicts) != len(verdict_set.judgments):
+        raise CandidateJudgeError("Evaluator must return exactly one verdict per candidate")
+    return verdicts
 
 
 def _bounded_evidence(handles: Sequence[ForkCandidateHandle], limit: int) -> str:
-    records: list[dict[str, Any]] = []
-    size = 0
-    for handle in handles:
-        item = {
+    records = [
+        {
             "candidate_key": handle.candidate_key,
             "candidate_run_id": handle.candidate_run_id,
             "output": handle.output or "",
         }
-        encoded = json.dumps(item, ensure_ascii=False).encode()
-        if size + len(encoded) > limit:
-            break
-        records.append(item)
-        size += len(encoded)
-    if not records:
+        for handle in handles
+    ]
+    evidence = json.dumps({"candidates": records}, ensure_ascii=False)
+    if len(evidence.encode()) > limit:
         raise CandidateJudgeError("Candidate evidence exceeds the host limit")
-    return json.dumps({"candidates": records}, ensure_ascii=False)
+    return evidence
 
 
 __all__ = [
@@ -272,4 +344,5 @@ __all__ = [
     "CandidateJudgeService",
     "CandidateJudgment",
     "CandidateVerdict",
+    "CandidateVerdictSet",
 ]
