@@ -43,6 +43,7 @@ def test_tui_distribution_installs_textual_and_the_default_workspace() -> None:
     dependencies = requires("yolop-tui") or []
 
     assert any(dependency.startswith("textual") for dependency in dependencies)
+    assert any(dependency.startswith("yolop-providers") for dependency in dependencies)
     assert any(dependency.startswith("yolop-workspace") for dependency in dependencies)
     assert not any(dependency.startswith("prompt-toolkit") for dependency in dependencies)
 

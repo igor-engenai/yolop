@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -17,12 +18,25 @@ import pytest
 def test_new_wheel_contains_an_isolated_public_package(
     distribution: str,
     module: str,
+    tmp_path: Path,
 ) -> None:
-    dist = Path(__file__).parents[1] / "dist"
-    wheels = sorted(dist.glob(f"{distribution.replace('-', '_')}-*.whl"))
-    assert wheels, f"Build {distribution} before running wheel smoke tests"
+    project_root = Path(__file__).parents[1]
+    subprocess.run(
+        [
+            "uv",
+            "build",
+            "--package",
+            distribution,
+            "--wheel",
+            "--out-dir",
+            str(tmp_path),
+        ],
+        cwd=project_root,
+        check=True,
+    )
+    wheel_path = next(tmp_path.glob(f"{distribution.replace('-', '_')}-*.whl"))
 
-    with ZipFile(wheels[-1]) as wheel:
+    with ZipFile(wheel_path) as wheel:
         names = set(wheel.namelist())
         assert any(name.startswith(f"{module}/") for name in names)
         metadata_name = next(name for name in names if name.endswith("/METADATA"))

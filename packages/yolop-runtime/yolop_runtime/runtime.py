@@ -208,11 +208,24 @@ class Runtime[HostDepsT]:
             execution_pin,
         )
         prompt_text = _prompt_text(prompt)
-        effective_parent_id = parent_run_id or session.head_run_id
-        if effective_parent_id is None:
+        session_runs = (
+            await self.store.list_runs(namespace, session_id=session_id)
+            if parent_run_id is None
+            else []
+        )
+        idempotent_run = next(
+            (run for run in session_runs if run.idempotency_key == idempotency_key),
+            None,
+        )
+        effective_parent_id = (
+            idempotent_run.parent_run_id
+            if idempotent_run is not None
+            else parent_run_id or session.head_run_id
+        )
+        if effective_parent_id is None and idempotent_run is None:
             pending_runs = [
                 run
-                for run in await self.store.list_runs(namespace, session_id=session_id)
+                for run in session_runs
                 if run.status in {RunStatus.ACCEPTED, RunStatus.RUNNING}
             ]
             if pending_runs:
@@ -225,7 +238,9 @@ class Runtime[HostDepsT]:
         if parent_run_id is not None and parent is not None and parent.session_id != session.id:
             raise RunStateError(f"Parent Run {parent_run_id!r} belongs to another session")
         effective_relation = relation or (
-            RunRelation.ROOT if parent is None else RunRelation.CONTINUATION
+            idempotent_run.relation
+            if idempotent_run is not None
+            else RunRelation.ROOT if parent is None else RunRelation.CONTINUATION
         )
         if effective_relation is RunRelation.ROOT and parent is not None:
             raise RunStateError("A root Run cannot have an ancestor")

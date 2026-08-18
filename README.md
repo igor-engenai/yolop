@@ -28,8 +28,8 @@ You can install smaller feature sets instead:
 - `uv add "yolop[memory]"` installs scoped persistent memory support.
 - `uv add "yolop[web]"` installs the web host and its runtime persistence.
 - `uv add "yolop[postgres-runtime]"` installs the PostgreSQL RuntimeStore and migration tools.
-- `uv add "yolop[tui,openai]"` installs the terminal host and OpenAI API support.
-- `uv add "yolop[tui,providers]"` installs the terminal host and optional YoloP providers.
+- `uv add "yolop[tui]"` installs the terminal host and its bundled Codex provider.
+- `uv add "yolop[tui,openai]"` also installs OpenAI API support for external AgentSpecs.
 - `uv add "yolop[openai]"` installs OpenAI API support.
 - `uv add "yolop[providers]"` installs the `yolop-providers` package, including Codex subscription support.
 - `uv add "yolop[deep]"` installs durable planning and the explicit deep-coding capability preset.
@@ -65,9 +65,10 @@ The API key is not part of AgentSpec. Pydantic AI reads `OPENAI_API_KEY` from th
 Start the bundled Workspace coding AgentSpec:
 
 ```bash
-export OPENAI_API_KEY="your-key"
 uv run yolop
 ```
+
+On first use, run `/login` and authenticate the bundled Codex provider.
 
 Use an external AgentSpec instead:
 
@@ -75,7 +76,7 @@ Use an external AgentSpec instead:
 uv run yolop --agent-spec examples/agents/chat.yaml
 ```
 
-The packaged command authorizes the current directory and injects it as the Workspace dependency. The bundled AgentSpec can read and write project files and run its explicit shell command allowlist. It uses `openai:gpt-5.6-luna` with high thinking and does not include Skills. An external AgentSpec fully replaces the bundled data and can select Workspace against the same host-authorized current directory. Other host resources still need an embedding host that injects them. Run the custom coding composition example with:
+The packaged command authorizes the current directory and injects it as the Workspace dependency. The bundled AgentSpec can read and write project files and run its explicit shell command allowlist. It uses `openai-codex:gpt-5.6-luna` with high thinking and does not include Skills. An external AgentSpec fully replaces the bundled data and can select Workspace against the same host-authorized current directory. Other host resources still need an embedding host that injects them. Run the custom coding composition example with:
 
 ```bash
 uv run python examples/coding_tui.py
@@ -104,19 +105,19 @@ V1 does not include model switching, direct shell mode, images, an external edit
 
 ## Use a ChatGPT Codex subscription
 
-Install the TUI and provider package:
+Install the TUI. Its bundled AgentSpec and package dependencies include the Codex provider:
 
 ```bash
-uv add "yolop[tui,providers]"
+uv add "yolop[tui]"
 ```
 
-Start the Codex coding example:
+Start the terminal host:
 
 ```bash
-uv run yolop --agent-spec examples/agents/codex.yaml
+uv run yolop
 ```
 
-Run `/login`, select **OpenAI Codex (ChatGPT Plus/Pro)**, open the displayed device URL, and enter the displayed code. Ctrl+C or Cancel stops login polling without changing credentials. After login, submit a prompt to perform the manual live smoke test. The example uses `openai-codex:gpt-5.6-luna` with high thinking and Workspace. Model names are passed through to Codex; account and plan availability remain server policy. The bundled default AgentSpec remains `openai:gpt-5.6-luna` and uses the normal OpenAI API.
+Run `/login`, select **OpenAI Codex (ChatGPT Plus/Pro)**, open the displayed device URL, and enter the displayed code. Ctrl+C or Cancel stops login polling without changing credentials. After login, submit a prompt to perform the manual live smoke test. The bundled AgentSpec uses `openai-codex:gpt-5.6-luna` with high thinking and Workspace. Model names are passed through to Codex; account and plan availability remain server policy.
 
 Authentication is also available without the TUI:
 
@@ -291,7 +292,7 @@ Process failure leaves an owned Run in durable `INTERRUPTED` state. YoloP does n
 
 ### `yolop-tui`
 
-[`packages/yolop-tui`](packages/yolop-tui) is the full-screen Textual terminal host. It owns Textual and Rich, the `yolop` command, a bundled Workspace coding AgentSpec, a managed interactive transcript, native steering and cancellation, compact tool and thinking views, `@file` policy, and modal local session selection. The packaged command depends on `yolop-workspace` and injects the current directory. The lower-level `run_tui(...)` still accepts caller-selected native dependencies. The package does not depend on prompt_toolkit or DuckDB.
+[`packages/yolop-tui`](packages/yolop-tui) is the full-screen Textual terminal host. It owns Textual and Rich, the `yolop` command, a bundled Workspace coding AgentSpec, a managed interactive transcript, native steering and cancellation, compact tool and thinking views, `@file` policy, and modal local session selection. The packaged command depends on `yolop-workspace` and `yolop-providers`, then injects the current directory. The lower-level `run_tui(...)` still accepts caller-selected native dependencies. The package does not depend on prompt_toolkit or DuckDB.
 
 ### `yolop-context`
 
