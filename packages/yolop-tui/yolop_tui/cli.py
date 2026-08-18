@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from hashlib import sha256
@@ -10,8 +11,10 @@ from yolop_runtime import ExecutionPin
 from yolop_sqlite_session import SQLiteRuntimeStore
 
 from .app import run_tui
+from .diagnostics import configure_logging
 
 _DEFAULT_SPEC = Path(__file__).with_name("agent_specs") / "coding.yaml"
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -22,25 +25,31 @@ class _HostDeps:
 def main(argv: Sequence[str] | None = None) -> None:
     """Run one AgentSpec in the local Textual terminal host."""
     args = _parser().parse_args(argv)
-    spec = AgentSpec.from_file(args.agent_spec or _DEFAULT_SPEC)
-    if not isinstance(spec.model, str):
-        raise SystemExit("The TUI AgentSpec must contain a string model reference")
-    pin = ExecutionPin.from_spec(spec, model_id=spec.model)
-    namespace = _execution_namespace(pin)
-    store = SQLiteRuntimeStore(args.database)
     workspace = Path.cwd().resolve()
-    deps = _HostDeps(workspace=workspace)
-    asyncio.run(
-        run_tui(
-            spec,
-            store=store,
-            namespace=namespace,
-            deps=deps,
-            deps_type=_HostDeps,
-            session_id=args.session,
-            cwd=workspace,
+    configure_logging(workspace)
+    _LOGGER.info("Starting YoloP TUI in %s", workspace)
+    try:
+        spec = AgentSpec.from_file(args.agent_spec or _DEFAULT_SPEC)
+        if not isinstance(spec.model, str):
+            raise SystemExit("The TUI AgentSpec must contain a string model reference")
+        pin = ExecutionPin.from_spec(spec, model_id=spec.model)
+        namespace = _execution_namespace(pin)
+        store = SQLiteRuntimeStore(args.database)
+        deps = _HostDeps(workspace=workspace)
+        asyncio.run(
+            run_tui(
+                spec,
+                store=store,
+                namespace=namespace,
+                deps=deps,
+                deps_type=_HostDeps,
+                session_id=args.session,
+                cwd=workspace,
+            )
         )
-    )
+    except Exception:
+        _LOGGER.exception("YoloP TUI startup failed")
+        raise
 
 
 def _parser() -> argparse.ArgumentParser:

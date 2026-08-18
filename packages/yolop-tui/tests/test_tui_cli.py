@@ -99,6 +99,7 @@ def test_cli_starts_bundled_workspace_agent_with_project_sqlite_default(
     main([])
 
     assert (tmp_path / ".yolop" / "runtime.db").is_file()
+    assert (tmp_path / ".yolop" / "yolop.log").is_file()
 
 
 def test_external_agentspec_fully_replaces_the_bundled_default(tmp_path) -> None:
