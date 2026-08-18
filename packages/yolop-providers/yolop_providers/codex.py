@@ -109,6 +109,20 @@ class CodexOAuth:
                 )
             if credential.expires_at > self._now() + _REFRESH_SKEW_SECONDS:
                 return credential.access_token.get_secret_value()
+        return await self.refresh_access_token()
+
+    async def refresh_access_token(self, *, stale_access_token: str | None = None) -> str:
+        """Force a token refresh after the API rejects the current access token."""
+        async with self.store.transaction() as transaction:
+            credential = transaction.load_oauth(_PROVIDER_NAME)
+            if credential is None:
+                raise CodexNotAuthenticatedError(
+                    "OpenAI Codex is not logged in; use /login or "
+                    "`yolop-providers login openai-codex`"
+                )
+            current_access_token = credential.access_token.get_secret_value()
+            if stale_access_token is not None and current_access_token != stale_access_token:
+                return current_access_token
             async with self._client() as client:
                 refreshed = await self._refresh(client, credential)
             transaction.save_oauth(_PROVIDER_NAME, refreshed)

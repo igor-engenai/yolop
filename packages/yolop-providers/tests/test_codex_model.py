@@ -7,6 +7,7 @@ from typing import Any
 import httpx
 from pydantic import SecretStr
 from pydantic_ai import Agent, AgentRunResultEvent, AgentSpec, Tool
+from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import ModelResponse, TextPart, ThinkingPart
 from pytest import MonkeyPatch, raises
 from yolop_providers import (
@@ -328,6 +329,87 @@ def test_installed_openai_codex_entry_point_accepts_arbitrary_model_names(
             deps=None,
             deps_type=type(None),
         )
+
+
+async def test_codex_model_refreshes_after_a_401_and_retries_once(tmp_path: Path) -> None:
+    old_token = _access_token("account-123")
+    new_token = _access_token("account-456")
+    store = CredentialStore(tmp_path / "auth.json")
+    store.save_oauth(
+        "openai-codex",
+        OAuthCredential(
+            access_token=SecretStr(old_token),
+            refresh_token=SecretStr("old-refresh"),
+            expires_at=2_000_000_000.0,
+            account_id="account-123",
+        ),
+    )
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.host == "auth.openai.com":
+            return httpx.Response(
+                200,
+                json={
+                    "access_token": new_token,
+                    "refresh_token": "new-refresh",
+                    "expires_in": 3_600,
+                },
+            )
+        if request.headers["authorization"] == f"Bearer {old_token}":
+            return httpx.Response(401, json={"error": {"code": "token_expired"}})
+        return httpx.Response(200, json=_text_response("gpt-5.6-luna", "retried"))
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        oauth = CodexOAuth(
+            store=store,
+            http_client=client,
+            now=lambda: 1_000_000_000.0,
+        )
+        model = create_codex_model("gpt-5.6-luna", oauth=oauth, http_client=client)
+        result = await Agent(model).run("Retry Codex")
+
+    assert result.output == "retried"
+    response_requests = [request for request in requests if request.url.host == "chatgpt.com"]
+    assert [request.headers["authorization"] for request in response_requests] == [
+        f"Bearer {old_token}",
+        f"Bearer {new_token}",
+    ]
+    assert store.load_oauth("openai-codex").access_token.get_secret_value() == new_token
+
+
+async def test_codex_model_does_not_refresh_after_a_non_401_error(tmp_path: Path) -> None:
+    token = _access_token("account-123")
+    store = CredentialStore(tmp_path / "auth.json")
+    store.save_oauth(
+        "openai-codex",
+        OAuthCredential(
+            access_token=SecretStr(token),
+            refresh_token=SecretStr("refresh-secret"),
+            expires_at=2_000_000_000.0,
+            account_id="account-123",
+        ),
+    )
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        assert request.url.host == "chatgpt.com"
+        return httpx.Response(403, json={"error": {"code": "forbidden"}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        oauth = CodexOAuth(
+            store=store,
+            http_client=client,
+            now=lambda: 1_000_000_000.0,
+        )
+        model = create_codex_model("gpt-5.6-luna", oauth=oauth, http_client=client)
+        with raises(ModelHTTPError) as error:
+            await Agent(model).run("Do not refresh")
+
+    assert error.value.status_code == 403
+    assert len(requests) == 1
 
 
 async def test_codex_model_refreshes_before_sending_a_model_request(tmp_path: Path) -> None:

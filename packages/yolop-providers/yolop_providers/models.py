@@ -2,6 +2,7 @@ from importlib.metadata import PackageNotFoundError, version
 from typing import Any, cast
 
 import httpx
+from openai import AsyncOpenAI
 from pydantic_ai.models.openai import (
     OpenAIModelName,
     OpenAIResponsesModel,
@@ -13,6 +14,43 @@ from .codex import CodexNotAuthenticatedError, CodexOAuth
 
 _CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
 _PROVIDER_NAME = "openai-codex"
+
+
+class _RefreshingAsyncOpenAI(AsyncOpenAI):
+    """Retry one Codex request after refreshing a token rejected with HTTP 401."""
+
+    def __init__(self, *, oauth: CodexOAuth, **kwargs: Any) -> None:
+        self._codex_oauth = oauth
+        super().__init__(**kwargs)
+
+    async def request(
+        self,
+        cast_to: Any,
+        options: Any,
+        *,
+        stream: bool = False,
+        stream_cls: Any = None,
+    ) -> Any:
+        stale_access_token = await self._codex_oauth.access_token()
+        try:
+            return await super().request(
+                cast_to,
+                options,
+                stream=stream,
+                stream_cls=stream_cls,
+            )
+        except Exception as error:
+            if getattr(error, "status_code", None) != 401:
+                raise
+            await self._codex_oauth.refresh_access_token(
+                stale_access_token=stale_access_token,
+            )
+            return await super().request(
+                cast_to,
+                options,
+                stream=stream,
+                stream_cls=stream_cls,
+            )
 
 
 class OpenAICodexProvider(OpenAIProvider):
@@ -39,7 +77,8 @@ class OpenAICodexProvider(OpenAIProvider):
             "OpenAI-Beta": "responses=experimental",
             "User-Agent": _user_agent(),
         }
-        self._client = self._create_openai_client(
+        self._client = _RefreshingAsyncOpenAI(
+            oauth=oauth,
             base_url=_CODEX_BASE_URL,
             api_key=cast(Any, oauth.access_token),
             http_client=http_client,
