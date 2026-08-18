@@ -107,6 +107,7 @@ def test_public_package_imports_load() -> None:
             "SessionPlanStore",
             "TaskAssignment",
             "load_deep_coding_spec",
+            "load_deep_research_spec",
         ),
         "yolop_delegation": (
             "DelegateCatalog",

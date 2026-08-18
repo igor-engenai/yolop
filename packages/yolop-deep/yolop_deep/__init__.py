@@ -195,7 +195,20 @@ from .teams import (  # noqa: E402
 
 def load_deep_coding_spec(*, catalog: ProviderCatalog | None = None) -> AgentSpec:
     """Load the explicit deep-coding preset after validating installed capabilities."""
-    with as_file(files("yolop_deep").joinpath("agent_specs/deep-coding.yaml")) as path:
+    return _load_preset("deep-coding.yaml", catalog=catalog)
+
+
+def load_deep_research_spec(*, catalog: ProviderCatalog | None = None) -> AgentSpec:
+    """Load the explicit deep-research preset after validating installed capabilities."""
+    return _load_preset("deep-research.yaml", catalog=catalog)
+
+
+def _load_preset(
+    filename: str,
+    *,
+    catalog: ProviderCatalog | None,
+) -> AgentSpec:
+    with as_file(files("yolop_deep").joinpath("agent_specs", filename)) as path:
         spec = AgentSpec.from_file(path)
     (catalog or ProviderCatalog.from_installed()).capability_types_for(spec)
     return spec
@@ -235,4 +248,5 @@ __all__ = [
     "TaskStatus",
     "deep_delegation_aliases",
     "load_deep_coding_spec",
+    "load_deep_research_spec",
 ]

@@ -1,12 +1,12 @@
 model: openai:gpt-5.6-luna
-name: deep-coding
-description: A durable deep coding agent with workspace tools, context control, and planning.
+name: deep-research
+description: A durable research agent with bounded context, planning, and host-selected delegation.
 instructions: |
-  You are a deep coding agent.
-  Inspect the relevant files before changing them.
+  You are a deep research agent.
+  Separate facts, evidence, and uncertainty.
   Keep the durable plan current for multi-step work.
-  Make the smallest change that fully meets the request.
-  Verify the result with the available tools.
+  Use only host-authorized delegate aliases when delegation is available.
+  Do not claim a task is complete without inspectable evidence.
 model_settings:
   thinking: high
 metadata:
@@ -14,7 +14,7 @@ metadata:
     aliases:
       - research
       - review
-    experimental_forks: true
+    experimental_forks: false
   memory:
     scopes:
       - session
@@ -27,8 +27,6 @@ capabilities:
   - Compaction:
       target_tokens: 12000
       keep_tool_pairs: 3
-      file_tools:
-        - read_file
       include_summarizer: true
       receipts: true
       incremental: true
@@ -46,21 +44,3 @@ capabilities:
         - get_available_tasks
   - StuckLoop: {}
   - WarnNearLimits: {}
-  - Workspace:
-      shell: true
-      allowed_commands:
-        - git
-        - rg
-        - grep
-        - find
-        - ls
-        - cat
-        - sed
-        - head
-        - tail
-        - python
-        - uv
-        - pytest
-        - ruff
-        - ty
-        - just
