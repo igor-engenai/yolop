@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any
 
 from pytest import raises
@@ -74,6 +75,23 @@ def test_registry_rejects_invalid_document_and_server() -> None:
             },
             server_url="https://api.example.com",
         )
+
+
+def test_service_config_deeply_freezes_the_pinned_document() -> None:
+    document = deepcopy(DOCUMENT)
+    configured = OpenAPIServiceConfig(
+        alias="crm",
+        document=document,
+        server_url="https://api.example.com",
+    )
+    digest = configured.spec_digest
+
+    document["paths"]["/users"]["get"]["operationId"] = "mutated"
+
+    assert configured.spec_digest == digest
+    assert set(configured.operations) == {"list_users", "delete_user"}
+    with raises(TypeError):
+        configured.document["paths"]["/users"]["get"]["operationId"] = "blocked"
 
 
 def test_registry_rejects_duplicate_alias_and_prefix() -> None:

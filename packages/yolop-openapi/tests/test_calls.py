@@ -8,6 +8,7 @@ from yolop_http import EgressPolicy, SafeHttpClient
 from yolop_openapi import (
     OpenAPIApprovalRequired,
     OpenAPICaller,
+    OpenAPIOperationError,
     OpenAPIServiceConfig,
 )
 
@@ -76,15 +77,151 @@ async def test_openapi_call_builds_bounded_request_parameters() -> None:
             path={"id": "42"},
             query={"q": "active"},
             headers={"X-Trace": "trace"},
-            cookies={"sid": "cookie"},
+            cookies={"sid": "x; admin=true"},
         )
     finally:
         await client.aclose()
 
     assert captured["url"] == "https://api.example.com/users/42?q=active"
     assert captured["headers"]["x-trace"] == "trace"
-    assert captured["headers"]["cookie"] == "sid=cookie"
+    assert captured["headers"]["cookie"] == 'sid="x\\073 admin=true"'
     assert result["body"] == {"id": "42"}
+
+
+async def test_openapi_call_rejects_parameter_in_wrong_location() -> None:
+    client = SafeHttpClient(
+        EgressPolicy(allowed_hosts=frozenset({"api.example.com"})),
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, content=b"ok", request=request)
+        ),
+    )
+    service = OpenAPIServiceConfig(
+        alias="crm",
+        document=document(),
+        server_url="https://api.example.com",
+        allowed_operations=frozenset({"get_user"}),
+    )
+    try:
+        with raises(OpenAPIOperationError, match="location"):
+            await OpenAPICaller(service, client).call(
+                "get_user",
+                path={"id": "42"},
+                headers={"q": "smuggled"},
+            )
+    finally:
+        await client.aclose()
+
+
+async def test_openapi_operation_can_disable_global_security() -> None:
+    captured: dict[str, Any] = {}
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        captured["headers"] = dict(request.headers)
+        return httpx.Response(200, content=b"ok", request=request)
+
+    public_document = document()
+    public_document["components"] = {
+        "securitySchemes": {
+            "apiKey": {"type": "apiKey", "in": "header", "name": "X-Key"}
+        }
+    }
+    public_document["security"] = [{"apiKey": []}]
+    public_document["paths"]["/users/{id}"]["get"]["security"] = []
+    client = SafeHttpClient(
+        EgressPolicy(allowed_hosts=frozenset({"api.example.com"})),
+        transport=httpx.MockTransport(respond),
+    )
+    service = OpenAPIServiceConfig(
+        alias="crm",
+        document=public_document,
+        server_url="https://api.example.com",
+        allowed_operations=frozenset({"get_user"}),
+        security_schemes={"apiKey": {"secret_ref": "kv/api-key"}},
+    )
+    try:
+        await OpenAPICaller(service, client).call("get_user", path={"id": "42"})
+    finally:
+        await client.aclose()
+
+    assert "x-key" not in captured["headers"]
+
+
+async def test_openapi_security_requirement_applies_all_schemes() -> None:
+    captured: dict[str, Any] = {}
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        captured["headers"] = dict(request.headers)
+        captured["query"] = dict(request.url.params)
+        return httpx.Response(201, content=b"ok", request=request)
+
+    secured_document = document()
+    secured_document["components"] = {
+        "securitySchemes": {
+            "headerKey": {"type": "apiKey", "in": "header", "name": "X-Key"},
+            "queryKey": {"type": "apiKey", "in": "query", "name": "api_key"},
+        }
+    }
+    secured_document["paths"]["/users"]["post"]["security"] = [
+        {"headerKey": [], "queryKey": []}
+    ]
+    client = SafeHttpClient(
+        EgressPolicy(allowed_hosts=frozenset({"api.example.com"})),
+        transport=httpx.MockTransport(respond),
+    )
+    service = OpenAPIServiceConfig(
+        alias="crm",
+        document=secured_document,
+        server_url="https://api.example.com",
+        allowed_operations=frozenset({"create_user"}),
+        security_schemes={
+            "headerKey": {"secret_ref": "kv/header"},
+            "queryKey": {"secret_ref": "kv/query"},
+        },
+    )
+    caller = OpenAPICaller(service, client, secret_resolver=lambda ref: f"secret:{ref}")
+    try:
+        await caller.call("create_user", body={"name": "Ada"}, approved=True)
+    finally:
+        await client.aclose()
+
+    assert captured["headers"]["x-key"] == "secret:kv/header"
+    assert captured["query"]["api_key"] == "secret:kv/query"
+
+
+async def test_openapi_standard_http_basic_authentication() -> None:
+    captured: dict[str, Any] = {}
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        captured["headers"] = dict(request.headers)
+        return httpx.Response(200, content=b"ok", request=request)
+
+    basic_document = document()
+    basic_document["components"] = {
+        "securitySchemes": {
+            "basicAuth": {"type": "http", "scheme": "basic"},
+        }
+    }
+    basic_document["paths"]["/users/{id}"]["get"]["security"] = [{"basicAuth": []}]
+    client = SafeHttpClient(
+        EgressPolicy(allowed_hosts=frozenset({"api.example.com"})),
+        transport=httpx.MockTransport(respond),
+    )
+    service = OpenAPIServiceConfig(
+        alias="crm",
+        document=basic_document,
+        server_url="https://api.example.com",
+        allowed_operations=frozenset({"get_user"}),
+        security_schemes={
+            "basicAuth": {"secret_ref": "kv/password", "username": "ada"}
+        },
+    )
+    caller = OpenAPICaller(service, client, secret_resolver=lambda _ref: "password")
+    try:
+        await caller.call("get_user", path={"id": "42"})
+    finally:
+        await client.aclose()
+
+    assert captured["headers"]["authorization"] == "Basic YWRhOnBhc3N3b3Jk"
 
 
 async def test_openapi_write_requires_approval_and_resolves_api_key() -> None:

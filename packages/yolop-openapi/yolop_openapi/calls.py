@@ -3,8 +3,9 @@ from __future__ import annotations
 import base64
 import inspect
 import json
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
+from http.cookies import SimpleCookie
 from typing import Any
 from urllib.parse import quote, urlencode, urljoin
 
@@ -58,10 +59,21 @@ class OpenAPICaller:
         cookie_values = dict(cookies or {})
         path_template = operation["path"]
         parameter_specs = _parameters(self.service.document, path_template, operation_id)
-        known = {str(parameter["name"]) for parameter in parameter_specs}
-        supplied = set(path_values) | set(query_values) | set(header_values) | set(cookie_values)
-        if not supplied.issubset(known):
-            raise OpenAPIOperationError("Unknown OpenAPI parameter")
+        declared = {
+            (str(parameter["name"]), str(parameter["in"])) for parameter in parameter_specs
+        }
+        supplied = {
+            (str(name), location)
+            for location, values in (
+                ("path", path_values),
+                ("query", query_values),
+                ("header", header_values),
+                ("cookie", cookie_values),
+            )
+            for name in values
+        }
+        if not supplied.issubset(declared):
+            raise OpenAPIOperationError("Unknown OpenAPI parameter or parameter location")
         for parameter in parameter_specs:
             name = str(parameter["name"])
             location = str(parameter["in"])
@@ -94,9 +106,10 @@ class OpenAPICaller:
         if query_values:
             url = f"{url}?{urlencode(query_values, doseq=True)}"
         if cookie_values:
-            resolved_headers["Cookie"] = "; ".join(
-                f"{name}={value}" for name, value in sorted(cookie_values.items())
-            )
+            cookie = SimpleCookie()
+            for name, value in sorted(cookie_values.items()):
+                cookie[name] = str(value)
+            resolved_headers["Cookie"] = cookie.output(header="", sep="; ").strip()
         content, content_type = _request_body(operation, body)
         if content_type is not None:
             resolved_headers.setdefault("Content-Type", content_type)
@@ -130,7 +143,11 @@ class OpenAPICaller:
         query: dict[str, Any],
         cookies: dict[str, str],
     ) -> dict[str, str]:
-        security = operation.get("security") or self.service.document.get("security") or []
+        security = (
+            operation["security"]
+            if "security" in operation
+            else self.service.document.get("security", [])
+        )
         if not security:
             return headers
         if self.secret_resolver is None:
@@ -138,40 +155,43 @@ class OpenAPICaller:
         requirement = security[0]
         if not isinstance(requirement, Mapping) or not requirement:
             raise OpenAPISecretError("OpenAPI security requirement is invalid")
-        scheme_name = next(iter(requirement))
-        scheme = self.service.document.get("components", {}).get("securitySchemes", {}).get(
-            scheme_name
-        )
-        config = self.service.security_schemes.get(scheme_name, {})
-        if not isinstance(scheme, Mapping):
-            raise OpenAPISecretError("OpenAPI security scheme is missing")
-        scheme_type = config.get("type", scheme.get("type"))
-        reference = config.get("secret_ref")
-        if not isinstance(reference, str):
-            raise OpenAPISecretError("OpenAPI secret reference is missing")
-        secret = self.secret_resolver(reference)
-        if inspect.isawaitable(secret):
-            secret = await secret
-        if not isinstance(secret, str) or not secret:
-            raise OpenAPISecretError("OpenAPI secret resolution failed")
-        if scheme_type == "apiKey":
-            location = config.get("in", scheme.get("in"))
-            name = config.get("name", scheme.get("name"))
-            if location == "header":
-                headers[str(name)] = secret
-            elif location == "query":
-                query[str(name)] = secret
-            elif location == "cookie":
-                cookies[str(name)] = secret
+        for scheme_name in requirement:
+            scheme = self.service.document.get("components", {}).get(
+                "securitySchemes", {}
+            ).get(scheme_name)
+            config = self.service.security_schemes.get(scheme_name, {})
+            if not isinstance(scheme, Mapping):
+                raise OpenAPISecretError("OpenAPI security scheme is missing")
+            scheme_type = config.get("type", scheme.get("type"))
+            http_scheme = config.get("scheme", scheme.get("scheme"))
+            reference = config.get("secret_ref")
+            if not isinstance(reference, str):
+                raise OpenAPISecretError("OpenAPI secret reference is missing")
+            secret = self.secret_resolver(reference)
+            if inspect.isawaitable(secret):
+                secret = await secret
+            if not isinstance(secret, str) or not secret:
+                raise OpenAPISecretError("OpenAPI secret resolution failed")
+            if scheme_type == "apiKey":
+                location = config.get("in", scheme.get("in"))
+                name = config.get("name", scheme.get("name"))
+                if location == "header":
+                    headers[str(name)] = secret
+                elif location == "query":
+                    query[str(name)] = secret
+                elif location == "cookie":
+                    cookies[str(name)] = secret
+                else:
+                    raise OpenAPISecretError("OpenAPI API key location is invalid")
+            elif scheme_type == "basic" or (
+                scheme_type == "http" and http_scheme == "basic"
+            ):
+                username = str(config.get("username", ""))
+                headers["Authorization"] = "Basic " + base64.b64encode(
+                    f"{username}:{secret}".encode()
+                ).decode()
             else:
-                raise OpenAPISecretError("OpenAPI API key location is invalid")
-        elif scheme_type == "basic":
-            username = str(config.get("username", ""))
-            headers["Authorization"] = "Basic " + base64.b64encode(
-                f"{username}:{secret}".encode()
-            ).decode()
-        else:
-            headers["Authorization"] = f"Bearer {secret}"
+                headers["Authorization"] = f"Bearer {secret}"
         return headers
 
 
@@ -193,10 +213,14 @@ def _parameters(
     operation = _operation(document, operation_id)
     path_item = document.get("paths", {}).get(path, {})
     values = []
-    if isinstance(path_item, Mapping) and isinstance(path_item.get("parameters"), list):
-        values.extend(value for value in path_item["parameters"] if isinstance(value, Mapping))
-    if isinstance(operation.get("parameters"), list):
-        values.extend(value for value in operation["parameters"] if isinstance(value, Mapping))
+    path_parameters = path_item.get("parameters") if isinstance(path_item, Mapping) else None
+    if isinstance(path_parameters, Sequence) and not isinstance(path_parameters, (str, bytes)):
+        values.extend(value for value in path_parameters if isinstance(value, Mapping))
+    operation_parameters = operation.get("parameters")
+    if isinstance(operation_parameters, Sequence) and not isinstance(
+        operation_parameters, (str, bytes)
+    ):
+        values.extend(value for value in operation_parameters if isinstance(value, Mapping))
     return values
 
 

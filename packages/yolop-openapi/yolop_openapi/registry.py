@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any
@@ -10,6 +10,14 @@ from typing import Any
 from pydantic_ai import AgentSpec, Tool
 from pydantic_ai.capabilities import AbstractCapability
 from pydantic_ai.toolsets import AbstractToolset, FunctionToolset
+
+
+def _deep_freeze(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: _deep_freeze(item) for key, item in value.items()})
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return tuple(_deep_freeze(item) for item in value)
+    return value
 
 
 class OpenAPIConfigurationError(ValueError):
@@ -51,7 +59,7 @@ class OpenAPIServiceConfig:
         if not str(document.get("openapi", "")).startswith("3."):
             raise OpenAPIConfigurationError("Only OpenAPI 3 documents are supported")
         servers = document.get("servers")
-        if not isinstance(servers, list) or not any(
+        if not isinstance(servers, Sequence) or isinstance(servers, (str, bytes)) or not any(
             isinstance(server, dict) and server.get("url") == self.server_url for server in servers
         ):
             raise OpenAPIServerError("Configured server is not present in the pinned document")
@@ -65,7 +73,8 @@ class OpenAPIServiceConfig:
         digest = _digest(document)
         if self.spec_digest is not None and self.spec_digest != digest:
             raise OpenAPIConfigurationError("OpenAPI document digest does not match")
-        object.__setattr__(self, "document", MappingProxyType(document))
+        object.__setattr__(self, "document", _deep_freeze(document))
+        object.__setattr__(self, "security_schemes", _deep_freeze(self.security_schemes))
         object.__setattr__(self, "spec_digest", digest)
 
     @property
