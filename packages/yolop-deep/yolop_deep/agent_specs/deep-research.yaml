@@ -1,0 +1,46 @@
+model: openai:gpt-5.6-luna
+name: deep-research
+description: A durable research agent with bounded context, planning, and host-selected delegation.
+instructions: |
+  You are a deep research agent.
+  Separate facts, evidence, and uncertainty.
+  Keep the durable plan current for multi-step work.
+  Use only host-authorized delegate aliases when delegation is available.
+  Do not claim a task is complete without inspectable evidence.
+model_settings:
+  thinking: high
+metadata:
+  delegation:
+    delegates:
+      - alias: research
+      - alias: review
+    experimental_forks: false
+  memory:
+    scopes:
+      - session
+      - workspace
+    tools:
+      - read
+      - search
+capabilities:
+  - Context: {}
+  - Compaction:
+      target_tokens: 12000
+      keep_tool_pairs: 3
+      include_summarizer: true
+      receipts: true
+      incremental: true
+  - Planning:
+      enable_subtasks: true
+      tools:
+        - write_plan
+        - read_plan
+        - add_task
+        - update_task_status
+        - update_task_statuses
+        - remove_task
+        - add_subtask
+        - set_dependency
+        - get_available_tasks
+  - StuckLoop: {}
+  - WarnNearLimits: {}

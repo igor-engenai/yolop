@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from importlib.resources import as_file, files
 from pathlib import Path
 from typing import Any, Literal
 
@@ -217,10 +218,17 @@ def _load_preset(
     *,
     catalog: ProviderCatalog | None,
 ) -> AgentSpec:
-    path = Path.cwd() / "examples" / "agents" / filename
-    if not path.is_file():
-        path = Path(__file__).resolve().parents[3] / "examples" / "agents" / filename
-    spec = AgentSpec.from_file(path)
+    packaged = files("yolop_deep").joinpath("agent_specs", filename)
+    if packaged.is_file():
+        with as_file(packaged) as path:
+            spec = AgentSpec.from_file(path)
+    else:
+        path = Path.cwd() / "examples" / "agents" / filename
+        if not path.is_file():
+            path = Path(__file__).resolve().parents[3] / "examples" / "agents" / filename
+        if not path.is_file():
+            raise FileNotFoundError(f"Deep AgentSpec {filename!r} is not installed")
+        spec = AgentSpec.from_file(path)
     (catalog or ProviderCatalog.from_installed()).capability_types_for(spec)
     return spec
 

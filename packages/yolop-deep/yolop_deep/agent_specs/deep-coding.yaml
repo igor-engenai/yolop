@@ -1,6 +1,6 @@
-model: openai-codex:gpt-5.6-luna
-name: coding
-description: Inspect and change code in the current project workspace.
+model: openai:gpt-5.6-luna
+name: deep-coding
+description: A durable deep coding agent with workspace tools, context control, and planning.
 instructions: |
   You are a deep coding agent.
   Inspect the relevant files before changing them.
@@ -9,7 +9,19 @@ instructions: |
   Verify the result with the available tools.
 model_settings:
   thinking: high
-
+metadata:
+  delegation:
+    delegates:
+      - alias: research
+      - alias: review
+    experimental_forks: true
+  memory:
+    scopes:
+      - session
+      - workspace
+    tools:
+      - read
+      - search
 capabilities:
   - Context: {}
   - Compaction:

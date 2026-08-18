@@ -12,6 +12,7 @@ dependencies = [
     "rich>=14.2.0,<15",
     "textual>=6,<7",
     "yolop>=0.1.0",
+    "yolop-deep>=0.1.0,<0.2.0",
     "yolop-providers>=0.1.0,<0.2.0",
     "yolop-runtime>=0.1.0",
     "yolop-sqlite-session>=0.1.0",
@@ -23,3 +24,6 @@ yolop = "yolop_tui.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["yolop_tui"]
+
+[tool.uv.sources]
+yolop-deep = { workspace = true }
