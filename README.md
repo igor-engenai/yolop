@@ -285,7 +285,7 @@ Process failure leaves an owned Run in durable `INTERRUPTED` state. YoloP does n
 
 ### `yolop-delegation`
 
-[`packages/yolop-delegation`](packages/yolop-delegation) provides a namespace-partitioned host catalog of immutable delegate AgentSpecs. Parent AgentSpecs select aliases and tighter bounded limits; the catalog pins each delegate's AgentSpec digest, version, and model identity before later Runtime delegation. It does not create child Runs or execute model calls.
+[`packages/yolop-delegation`](packages/yolop-delegation) provides a namespace-partitioned host catalog of immutable delegate AgentSpecs and a native synchronous delegation capability. Parent AgentSpecs select aliases and tighter bounded limits; the catalog pins each delegate's AgentSpec digest, version, and model identity before the host Runtime creates a child Session and Run. Background child supervision and task teams remain later roadmap work.
 
 ### `yolop-memory`
 

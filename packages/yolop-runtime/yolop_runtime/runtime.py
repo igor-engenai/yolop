@@ -224,9 +224,7 @@ class Runtime[HostDepsT]:
         )
         if effective_parent_id is None and idempotent_run is None:
             pending_runs = [
-                run
-                for run in session_runs
-                if run.status in {RunStatus.ACCEPTED, RunStatus.RUNNING}
+                run for run in session_runs if run.status in {RunStatus.ACCEPTED, RunStatus.RUNNING}
             ]
             if pending_runs:
                 effective_parent_id = pending_runs[-1].id
@@ -235,12 +233,12 @@ class Runtime[HostDepsT]:
             if effective_parent_id is not None
             else None
         )
-        if parent_run_id is not None and parent is not None and parent.session_id != session.id:
-            raise RunStateError(f"Parent Run {parent_run_id!r} belongs to another session")
         effective_relation = relation or (
             idempotent_run.relation
             if idempotent_run is not None
-            else RunRelation.ROOT if parent is None else RunRelation.CONTINUATION
+            else RunRelation.ROOT
+            if parent is None
+            else RunRelation.CONTINUATION
         )
         if effective_relation is RunRelation.ROOT and parent is not None:
             raise RunStateError("A root Run cannot have an ancestor")

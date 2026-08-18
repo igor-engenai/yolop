@@ -785,7 +785,7 @@ class SQLiteRuntimeStore:
                     """,
                     (validated_namespace, parent_run_id),
                 ).fetchone()
-                if parent_row is None or parent_row[0] != validated_id:
+                if parent_row is None:
                     raise RunNotFoundError(f"Parent Run {parent_run_id!r} does not exist")
                 parent_root_run_id = parent_row[1] or parent_run_id
                 assert parent_root_run_id is not None

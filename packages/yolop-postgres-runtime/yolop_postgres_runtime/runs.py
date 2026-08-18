@@ -507,7 +507,7 @@ class PostgresRunOperations:
                         (validated_namespace, _as_uuid(validated_parent_id)),
                     )
                     parent_row = await parent_cursor.fetchone()
-                    if parent_row is None or parent_row[0] != session_uuid:
+                    if parent_row is None:
                         raise RunNotFoundError(
                             f"Parent Run {validated_parent_id!r} does not exist"
                         )

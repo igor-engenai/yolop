@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import json
 import re
 from collections.abc import Iterable, Mapping
@@ -374,17 +375,48 @@ def _effective_limit(requested: int | None, host_limit: int, *, field_name: str)
     return requested
 
 
+_EXECUTION_EXPORTS = frozenset(
+    {
+        "DelegateExecutionError",
+        "DelegateExecutor",
+        "DelegateRequest",
+        "DelegateResult",
+        "DelegationCapability",
+        "DelegationHostPolicy",
+        "RuntimeDelegateExecutor",
+        "build_delegation_capability",
+    }
+)
+
+
+def __getattr__(name: str) -> Any:
+    if name not in _EXECUTION_EXPORTS:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    execution = importlib.import_module(".execution", __name__)
+    value = getattr(execution, name)
+    globals()[name] = value
+    return value
+
+
 __all__ = [
     "DelegateAgentSelection",
     "DelegateCatalog",
     "DelegateConfigurationError",
     "DelegateDefinition",
+    "DelegateExecutionError",
+    "DelegateExecutor",
     "DelegatePin",
     "DelegatePinMismatchError",
     "DelegatePolicyError",
+    "DelegateRequest",
     "DelegateResolution",
+    "DelegateResult",
     "DelegateSelection",
+    "DelegationCapability",
+    "DelegationHostPolicy",
     "DelegateUnknownError",
+    "RuntimeDelegateExecutor",
     "ResolvedDelegate",
+    "build_delegation_capability",
     "selections_from_spec",
 ]

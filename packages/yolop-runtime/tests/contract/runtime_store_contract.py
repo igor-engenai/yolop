@@ -119,6 +119,36 @@ class RuntimeStoreContract:
                 relation=RunRelation.CONTINUATION,
             )
 
+    async def test_related_runs_can_use_a_different_child_session(self, tmp_path: Path) -> None:
+        store = await self.make_store(tmp_path / "runtime.db")
+        parent_session = await store.create_session(
+            "tenant/acme",
+            pin=ExecutionPin(agent_spec_id="a" * 64, model_id="parent:model"),
+        )
+        child_session = await store.create_session(
+            "tenant/acme",
+            pin=ExecutionPin(agent_spec_id="b" * 64, model_id="child:model"),
+        )
+        parent = await store.reserve_run(
+            "tenant/acme",
+            parent_session.id,
+            idempotency_key="parent",
+            prompt="Parent",
+        )
+
+        child = await store.reserve_run(
+            "tenant/acme",
+            child_session.id,
+            idempotency_key="child",
+            prompt="Child",
+            parent_run_id=parent.run.id,
+            relation=RunRelation.CHILD,
+        )
+
+        assert child.run.session_id == child_session.id
+        assert child.run.parent_run_id == parent.run.id
+        assert child.run.root_run_id == parent.run.id
+
     async def test_idempotency_key_is_bound_to_run_initiator(self, tmp_path: Path) -> None:
         store = await self.make_store(tmp_path / "runtime.db")
         session = await store.create_session(
@@ -491,14 +521,17 @@ class RuntimeStoreContract:
         assert sum(isinstance(result, StateSequenceConflictError) for result in results) == 1
         assert [entry.sequence for entry in entries] == [1, 2]
         assert entries[0] == first
-        assert await reopened.read_state(
-            "tenant/beta",
-            owner_id="plugin.counter",
-            scope=StateScope.SESSION,
-            scope_id=session.id,
-            state_kind="counter",
-            schema_version=1,
-        ) == []
+        assert (
+            await reopened.read_state(
+                "tenant/beta",
+                owner_id="plugin.counter",
+                scope=StateScope.SESSION,
+                scope_id=session.id,
+                state_kind="counter",
+                schema_version=1,
+            )
+            == []
+        )
 
     async def test_run_ancestry_and_root_budget_limits_are_durable(
         self,
