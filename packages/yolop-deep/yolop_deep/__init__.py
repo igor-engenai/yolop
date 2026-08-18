@@ -161,6 +161,17 @@ class Planning(HarnessPlanning[Any]):
         return "Planning"
 
 
+from .teams import (  # noqa: E402
+    AssignmentConflictError,
+    ChannelAuthorizationError,
+    ChannelMessage,
+    DelegatedTaskCoordinator,
+    PlanDependencyError,
+    TaskAssignment,
+    deep_delegation_aliases,
+)
+
+
 def load_deep_coding_spec(*, catalog: ProviderCatalog | None = None) -> AgentSpec:
     """Load the explicit deep-coding preset after validating installed capabilities."""
     with as_file(files("yolop_deep").joinpath("agent_specs/deep-coding.yaml")) as path:
@@ -175,10 +186,17 @@ __all__ = [
     "GoalStatus",
     "GoalStore",
     "GoalVerdict",
+    "AssignmentConflictError",
+    "ChannelAuthorizationError",
+    "ChannelMessage",
+    "DelegatedTaskCoordinator",
+    "PlanDependencyError",
     "PlanItem",
     "PlanStore",
     "Planning",
     "SessionPlanStore",
+    "TaskAssignment",
     "TaskStatus",
+    "deep_delegation_aliases",
     "load_deep_coding_spec",
 ]

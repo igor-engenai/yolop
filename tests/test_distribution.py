@@ -96,7 +96,15 @@ def test_public_package_imports_load() -> None:
             "cleanup_session_artifacts",
             "retain_run_artifacts",
         ),
-        "yolop_deep": ("PlanItem", "Planning", "SessionPlanStore", "load_deep_coding_spec"),
+        "yolop_deep": (
+            "ChannelMessage",
+            "DelegatedTaskCoordinator",
+            "PlanItem",
+            "Planning",
+            "SessionPlanStore",
+            "TaskAssignment",
+            "load_deep_coding_spec",
+        ),
         "yolop_delegation": (
             "DelegateCatalog",
             "DelegateDefinition",

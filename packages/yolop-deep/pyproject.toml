@@ -11,6 +11,7 @@ dependencies = [
     "pydantic-ai-harness>=0.21.0,<0.22",
     "pydantic-ai-slim>=2.31.0",
     "yolop-context>=0.1.0,<0.2.0",
+    "yolop-delegation>=0.1.0,<0.2.0",
     "yolop-runtime>=0.1.0,<0.2.0",
     "yolop-workspace>=0.1.0,<0.2.0",
 ]

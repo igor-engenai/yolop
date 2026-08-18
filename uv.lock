@@ -2094,6 +2094,7 @@ dependencies = [
     { name = "pydantic-ai-harness" },
     { name = "pydantic-ai-slim" },
     { name = "yolop-context" },
+    { name = "yolop-delegation" },
     { name = "yolop-runtime" },
     { name = "yolop-workspace" },
 ]
@@ -2103,6 +2104,7 @@ requires-dist = [
     { name = "pydantic-ai-harness", specifier = ">=0.21.0,<0.22" },
     { name = "pydantic-ai-slim", specifier = ">=2.31.0" },
     { name = "yolop-context", editable = "packages/yolop-context" },
+    { name = "yolop-delegation", editable = "packages/yolop-delegation" },
     { name = "yolop-runtime", editable = "packages/yolop-runtime" },
     { name = "yolop-workspace", editable = "packages/yolop-workspace" },
 ]
