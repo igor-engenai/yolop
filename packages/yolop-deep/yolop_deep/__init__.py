@@ -33,6 +33,12 @@ from .forks import (
     ForkCandidateStatus,
 )
 from .goals import GoalRecord, GoalRunner, GoalStatus, GoalStore, GoalVerdict
+from .workspaces import (
+    CandidateWorkspaceHandle,
+    CandidateWorkspaceLimitError,
+    CandidateWorkspaceService,
+    WorkspaceIsolationError,
+)
 
 _PLAN_OWNER = "yolop.deep.planning"
 _PLAN_STATE_KIND = "plan"
@@ -192,6 +198,9 @@ __all__ = [
     "CandidateConflictError",
     "CandidateLimitError",
     "CandidateNotFoundError",
+    "CandidateWorkspaceHandle",
+    "CandidateWorkspaceLimitError",
+    "CandidateWorkspaceService",
     "ForkCandidateHandle",
     "ForkCandidateService",
     "ForkCandidateStatus",
@@ -200,6 +209,7 @@ __all__ = [
     "GoalStatus",
     "GoalStore",
     "GoalVerdict",
+    "WorkspaceIsolationError",
     "AssignmentConflictError",
     "ChannelAuthorizationError",
     "ChannelMessage",

@@ -97,6 +97,7 @@ def test_public_package_imports_load() -> None:
             "retain_run_artifacts",
         ),
         "yolop_deep": (
+            "CandidateWorkspaceService",
             "ChannelMessage",
             "DelegatedTaskCoordinator",
             "ForkCandidateService",
