@@ -200,12 +200,11 @@ class ForkCandidateService:
                 return await self._view(existing)
             if len(records) >= self.max_candidates:
                 raise CandidateLimitError("Fork candidate limit has been reached")
-            current_source = await self.runtime.load_session(namespace, source_session_id)
             candidate_session = await self.runtime.fork_session_locked(
                 namespace,
                 source_session_id,
                 source_run_id,
-                expected_revision=current_source.revision,
+                expected_revision=source_session.revision,
             )
             reservation = await self.runtime.reserve_run(
                 namespace,

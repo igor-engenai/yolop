@@ -131,12 +131,12 @@ class DelegationCapability(AbstractCapability[Any]):
                 raise DelegatePolicyError("Delegate task must not be empty")
             if len(task) > self.host_policy.max_task_chars:
                 raise DelegatePolicyError("Delegate task exceeds the host limit")
+            if not isinstance(ctx.deps, RuntimeDeps):
+                raise DelegatePolicyError("Delegation requires a Runtime execution scope")
             async with self._child_count_lock:
                 selected.validate_invocation(depth=self.depth, child_count=self._child_count)
                 request_child_count = self._child_count
                 self._child_count += 1
-            if not isinstance(ctx.deps, RuntimeDeps):
-                raise DelegatePolicyError("Delegation requires a Runtime execution scope")
             scope = ctx.deps.scope
             call_id = ctx.tool_call_id or task
             request = DelegateRequest(
