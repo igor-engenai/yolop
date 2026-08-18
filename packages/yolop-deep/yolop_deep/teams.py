@@ -215,10 +215,14 @@ class DelegatedTaskCoordinator:
         if item is None:
             raise ValueError(f"Plan item {item_id!r} does not exist")
         items = await plan.get_items()
+        items_by_id = {dependency.id: dependency for dependency in items}
         blocked = {
-            dependency.id
-            for dependency in items
-            if dependency.id in item.depends_on and dependency.status is not TaskStatus.completed
+            dependency_id
+            for dependency_id in item.depends_on
+            if (
+                dependency_id not in items_by_id
+                or items_by_id[dependency_id].status is not TaskStatus.completed
+            )
         }
         if blocked:
             raise PlanDependencyError(

@@ -73,6 +73,7 @@ class _BackgroundTaskRecord(BaseModel):
     namespace: str
     parent_session_id: str
     parent_run_id: str
+    root_run_id: str | None = None
     child_session_id: str
     child_run_id: str
     task: str = Field(min_length=1, max_length=16_384)
@@ -217,6 +218,7 @@ class BackgroundDelegationService:
             namespace=namespace,
             parent_session_id=parent_session_id,
             parent_run_id=parent_run_id,
+            root_run_id=parent_run.root_run_id or parent_run.id,
             child_session_id=parent_session_id,
             child_run_id=parent_run_id,
             task=task,
@@ -243,6 +245,22 @@ class BackgroundDelegationService:
                         "Background operation key has different task, pin, or limits"
                     )
                 return await self._view(existing)
+            current_parent_run = await self.runtime.get_run(namespace, parent_run_id)
+            if current_parent_run.session_id != parent_session_id:
+                raise BackgroundTaskConflictError(
+                    "Parent Run does not belong to the parent Session"
+                )
+            if current_parent_run.status in {
+                RunStatus.COMPLETED,
+                RunStatus.FAILED,
+                RunStatus.INTERRUPTED,
+            }:
+                raise BackgroundTaskConflictError(
+                    "Background work cannot start from a terminal parent Run"
+                )
+            template = template.model_copy(
+                update={"root_run_id": current_parent_run.root_run_id or current_parent_run.id}
+            )
             child_session = await self.runtime.create_session(
                 namespace,
                 spec=selected.spec,
@@ -344,7 +362,7 @@ class BackgroundDelegationService:
                 namespace=record.namespace,
                 parent_session_id=record.parent_session_id,
                 parent_run_id=record.parent_run_id,
-                root_run_id=record.parent_run_id,
+                root_run_id=record.root_run_id or record.parent_run_id,
                 delegate=selected,
                 task=record.task,
                 depth=record.depth,

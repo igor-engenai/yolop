@@ -140,6 +140,12 @@ async def test_dependencies_block_and_channel_authorization_is_scoped(tmp_path: 
         PlanItem(id="second", content="Second", depends_on=["first"]),
         run_id=parent_run_id,
     )
+    await coordinator.add_plan_item(
+        "tenant/acme",
+        session_id,
+        PlanItem(id="missing", content="Missing dependency", depends_on=["does-not-exist"]),
+        run_id=parent_run_id,
+    )
     await coordinator.assign(
         "tenant/acme",
         session_id,
@@ -148,6 +154,23 @@ async def test_dependencies_block_and_channel_authorization_is_scoped(tmp_path: 
         parent_spec=spec,
         run_id=parent_run_id,
     )
+    await coordinator.assign(
+        "tenant/acme",
+        session_id,
+        "missing",
+        alias="review",
+        parent_spec=spec,
+        run_id=parent_run_id,
+    )
+
+    with raises(PlanDependencyError):
+        await coordinator.start_available(
+            "tenant/acme",
+            session_id,
+            "missing",
+            parent_run_id=parent_run_id,
+            parent_spec=spec,
+        )
 
     with raises(PlanDependencyError):
         await coordinator.start_available(

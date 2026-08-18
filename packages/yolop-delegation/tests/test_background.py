@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from pathlib import Path
 
 from pydantic_ai import AgentSpec
@@ -14,8 +15,9 @@ from yolop_delegation import (
     BackgroundTaskNotActiveError,
     BackgroundTaskStatus,
     DelegateCatalog,
+    DelegateRequest,
 )
-from yolop_runtime import RunStatus, Runtime
+from yolop_runtime import RunRelation, RunStatus, Runtime
 from yolop_sqlite_session import SQLiteRuntimeStore
 
 
@@ -93,6 +95,89 @@ async def test_background_start_is_durable_and_idempotent(tmp_path: Path) -> Non
         pass
     else:
         raise AssertionError("different task must conflict with an existing operation")
+
+
+async def test_background_rechecks_terminal_parent_after_lock(
+    tmp_path: Path, monkeypatch
+) -> None:
+    runtime = Runtime(store=SQLiteRuntimeStore(tmp_path / "runtime.db"))
+    spec, parent_session_id, parent_run_id = await make_parent(runtime)
+    parent = await runtime.get_run("tenant/acme", parent_run_id)
+    terminal = replace(parent, status=RunStatus.COMPLETED)
+    calls = 0
+
+    async def get_run(namespace: str, run_id: str):
+        nonlocal calls
+        calls += 1
+        return parent if calls == 1 else terminal
+
+    monkeypatch.setattr(runtime, "get_run", get_run)
+    service = BackgroundDelegationService(
+        runtime,
+        catalog=catalog(),
+        model_for_id=lambda model_id: model_id,
+        deps_for_request=lambda _request: (None, type(None)),
+    )
+
+    with raises(BackgroundTaskConflictError, match="terminal"):
+        await service.start(
+            "tenant/acme",
+            parent_session_id,
+            parent_run_id,
+            parent_spec=spec,
+            alias="research",
+            task="investigate",
+            operation_key="race",
+        )
+    assert calls == 2
+
+
+async def test_background_worker_preserves_root_run_id(tmp_path: Path) -> None:
+    runtime = Runtime(store=SQLiteRuntimeStore(tmp_path / "runtime.db"))
+    _root_spec, _root_session_id, root_run_id = await make_parent(runtime)
+    child_spec = AgentSpec(
+        model="child-parent:model",
+        metadata={"delegation": {"delegates": [{"alias": "research"}]}},
+    )
+    child_session = await runtime.create_session(
+        "tenant/acme", spec=child_spec, model_id="child-parent:model"
+    )
+    child_parent = await runtime.store.reserve_run(
+        "tenant/acme",
+        child_session.id,
+        idempotency_key="child-parent",
+        prompt="Child parent",
+        parent_run_id=root_run_id,
+        relation=RunRelation.CHILD,
+    )
+    requests: list[DelegateRequest] = []
+
+    async def respond(_messages: list[ModelMessage], _info: AgentInfo) -> AsyncIterator[str]:
+        yield "done"
+
+    def deps_for_request(request: DelegateRequest) -> tuple[None, type[None]]:
+        requests.append(request)
+        return None, type(None)
+
+    service = BackgroundDelegationService(
+        runtime,
+        catalog=catalog(),
+        model_for_id=lambda model_id: FunctionModel(stream_function=respond),
+        deps_for_request=deps_for_request,
+    )
+    handle = await service.start(
+        "tenant/acme",
+        child_session.id,
+        child_parent.run.id,
+        parent_spec=child_spec,
+        alias="research",
+        task="investigate",
+        operation_key="nested",
+    )
+
+    await service.run_worker(handle)
+
+    assert requests[0].root_run_id == root_run_id
 
 
 async def test_background_worker_is_restartable_and_collect_is_bounded(tmp_path: Path) -> None:
