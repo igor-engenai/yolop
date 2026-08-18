@@ -10,13 +10,16 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 from uuid import UUID
 
-from psycopg import AsyncConnection
+from psycopg import AsyncConnection, sql
 from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
 from pydantic_ai.messages import ModelMessage, ModelMessagesTypeAdapter
 from yolop_runtime import (
     ExecutionPin,
     PluginStateEntry,
+    RunNotFoundError,
+    RunStateError,
+    RunStatus,
     RuntimeSessionSnapshot,
     SessionConflictError,
     SessionFormatError,
@@ -191,6 +194,94 @@ class PostgresSessionOperations:
             messages=messages,
             revision=revision,
             head_run_id=_as_id(head_run_id),
+        )
+
+    async def checkout_session(
+        self: _PooledStore,
+        namespace: str,
+        session_id: str,
+        run_id: str,
+        *,
+        expected_revision: str,
+    ) -> RuntimeSessionSnapshot:
+        from .runs import _RUN_SELECT, _run_snapshot
+
+        validated_namespace = validate_namespace(namespace)
+        validated_session_id = validate_session_id(session_id)
+        validated_run_id = validate_session_id(run_id)
+        async with self._pool.connection() as connection:
+            async with connection.transaction():
+                run_cursor = await connection.execute(
+                    _RUN_SELECT + sql.SQL("WHERE namespace = %s AND id = %s"),
+                    (validated_namespace, _as_uuid(validated_run_id)),
+                )
+                run_row = await run_cursor.fetchone()
+                if run_row is None:
+                    raise RunNotFoundError(f"Run {run_id!r} does not exist")
+                run = await _run_snapshot(
+                    connection,
+                    namespace=validated_namespace,
+                    row=run_row,
+                )
+                if run.session_id != validated_session_id:
+                    raise RunStateError(f"Run {run_id!r} belongs to another session")
+                if run.status not in {
+                    RunStatus.COMPLETED,
+                    RunStatus.FAILED,
+                    RunStatus.INTERRUPTED,
+                }:
+                    raise RunStateError(f"Run {run_id!r} is not terminal")
+                session_cursor = await connection.execute(
+                    """
+                    SELECT agent_spec_id, model_id, revision
+                    FROM yolop_runtime_sessions
+                    WHERE namespace = %s AND id = %s
+                    FOR UPDATE
+                    """,
+                    (validated_namespace, _as_uuid(validated_session_id)),
+                )
+                session_row = await session_cursor.fetchone()
+                if session_row is None:
+                    raise SessionNotFoundError(f"Session {session_id!r} does not exist")
+                agent_spec_id, model_id, current_revision = session_row
+                if current_revision != expected_revision:
+                    raise SessionConflictError(f"Session {session_id!r} has changed")
+                revision = _revision(run.active_messages)
+                await connection.execute(
+                    """
+                    INSERT INTO yolop_runtime_session_contexts (
+                        namespace, session_id, revision, messages
+                    ) VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (namespace, session_id, revision)
+                    DO UPDATE SET messages = EXCLUDED.messages
+                    """,
+                    (
+                        validated_namespace,
+                        _as_uuid(validated_session_id),
+                        revision,
+                        Jsonb(_message_payload(run.active_messages)),
+                    ),
+                )
+                await connection.execute(
+                    """
+                    UPDATE yolop_runtime_sessions
+                    SET revision = %s, head_run_id = %s, updated_at = CURRENT_TIMESTAMP
+                    WHERE namespace = %s AND id = %s
+                    """,
+                    (
+                        revision,
+                        _as_uuid(validated_run_id),
+                        validated_namespace,
+                        _as_uuid(validated_session_id),
+                    ),
+                )
+        return RuntimeSessionSnapshot(
+            id=validated_session_id,
+            namespace=validated_namespace,
+            pin=ExecutionPin(agent_spec_id=agent_spec_id, model_id=model_id),
+            messages=list(run.active_messages),
+            revision=revision,
+            head_run_id=validated_run_id,
         )
 
     async def replace_session(

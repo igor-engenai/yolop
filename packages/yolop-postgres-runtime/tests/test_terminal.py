@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pydantic_ai import DeferredToolRequests
 from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
 from pydantic_ai.usage import RunUsage
 from pytest import raises
@@ -61,6 +62,44 @@ async def test_postgres_completion_updates_session_and_run_atomically(
         assert loaded_session == completion.session
         assert loaded_run == completion.run
         assert loaded_session.head_run_id == claimed.id
+    finally:
+        await store.close()
+
+
+async def test_postgres_completion_persists_native_deferred_output(
+    postgres_dsn: str,
+) -> None:
+    store = await PostgresRuntimeStore(postgres_dsn).open()
+    try:
+        session = await store.create_session(
+            "tenant/acme",
+            pin=ExecutionPin(agent_spec_id="a" * 64, model_id="openai:model"),
+        )
+        reservation = await store.reserve_run(
+            "tenant/acme",
+            session.id,
+            idempotency_key="request-1",
+            prompt="Run external tool",
+        )
+        claimed = await store.claim_run(
+            "tenant/acme",
+            reservation.run.id,
+            owner_id="worker-1",
+            lease_seconds=30,
+        )
+
+        await store.complete_run(
+            "tenant/acme",
+            claimed.id,
+            owner_id="worker-1",
+            expected_session_revision=session.revision,
+            messages=[],
+            output=DeferredToolRequests(),
+            usage=RunUsage(requests=1),
+        )
+
+        loaded = await store.load_run("tenant/acme", claimed.id)
+        assert loaded.output == {"calls": [], "approvals": [], "metadata": {}}
     finally:
         await store.close()
 
@@ -131,10 +170,15 @@ async def test_postgres_cancellation_invalidates_run_ownership(postgres_dsn: str
             lease_seconds=30,
         )
 
-        cancelled = await store.cancel_run("tenant/acme", claimed.id)
+        cancelled = await store.cancel_run(
+            "tenant/acme",
+            claimed.id,
+            output=DeferredToolRequests(),
+        )
 
         assert cancelled.status is RunStatus.INTERRUPTED
         assert cancelled.owner_id is None
+        assert cancelled.output == {"calls": [], "approvals": [], "metadata": {}}
         with raises(RunStateError):
             await store.complete_run(
                 "tenant/acme",

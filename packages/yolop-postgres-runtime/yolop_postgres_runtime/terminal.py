@@ -10,6 +10,7 @@ from psycopg.types.json import Jsonb
 from pydantic import TypeAdapter
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.usage import RunUsage
+from pydantic_core import to_jsonable_python
 from yolop_runtime import (
     ExecutionPin,
     RunCompletion,
@@ -56,6 +57,10 @@ def _json_event_data(data: str) -> Any:
 
 def _usage_payload(usage: RunUsage) -> dict[str, Any]:
     return json.loads(TypeAdapter(RunUsage).dump_json(usage))
+
+
+def _json_payload(value: Any) -> Any:
+    return to_jsonable_python(value)
 
 
 class PostgresTerminalOperations:
@@ -186,6 +191,7 @@ class PostgresTerminalOperations:
         full_list = list(full_messages if full_messages is not None else messages or ())
         active_list = list(active_messages if active_messages is not None else messages or ())
         revision = _revision(active_list)
+        output_payload = _json_payload(output)
         now = datetime.now(UTC)
         async with self._pool.connection() as connection:
             async with connection.transaction():
@@ -269,7 +275,7 @@ class PostgresTerminalOperations:
                     """,
                     (
                         now,
-                        Jsonb(output),
+                        Jsonb(output_payload),
                         Jsonb(_usage_payload(usage)),
                         revision,
                         full_range[0] if full_range else None,
@@ -297,7 +303,7 @@ class PostgresTerminalOperations:
                 updated[15] = now
                 updated[16] = None
                 updated[17] = None
-                updated[18] = output
+                updated[18] = output_payload
                 updated[19] = _usage_payload(usage)
                 updated[20] = revision
                 completed_run = await _run_snapshot(
@@ -437,6 +443,7 @@ class PostgresTerminalOperations:
                     namespace=validated_namespace,
                     row=row,
                 )
+                output_payload = _json_payload(output) if output is not None else None
                 full_list = list(
                     full_messages if full_messages is not None else existing.full_messages
                 )
@@ -497,7 +504,7 @@ class PostgresTerminalOperations:
                         error_code,
                         error_detail,
                         revision,
-                        Jsonb(output) if output is not None else None,
+                        Jsonb(output_payload) if output_payload is not None else None,
                         Jsonb(_usage_payload(usage)) if usage is not None else None,
                         full_range[0] if full_range else None,
                         full_range[1] if full_range else None,
@@ -524,7 +531,7 @@ class PostgresTerminalOperations:
                 updated[15] = now
                 updated[16] = None
                 updated[17] = None
-                updated[18] = output
+                updated[18] = output_payload
                 updated[19] = _usage_payload(usage) if usage is not None else None
                 updated[20] = revision
                 updated[21] = error_code

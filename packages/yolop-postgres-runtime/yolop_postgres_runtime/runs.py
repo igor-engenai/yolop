@@ -24,6 +24,7 @@ from yolop_runtime import (
     RunStatus,
     RuntimeBudget,
     RuntimeRunSnapshot,
+    StoredRunEvent,
     input_digest,
     new_session_id,
     validate_namespace,
@@ -163,6 +164,31 @@ async def _load_message_range(
     return ModelMessagesTypeAdapter.validate_json(json.dumps(payload, separators=(",", ":")))
 
 
+async def _load_run_events(
+    connection: AsyncConnection[Any],
+    *,
+    namespace: str,
+    run_id: UUID,
+) -> list[StoredRunEvent]:
+    cursor = await connection.execute(
+        """
+        SELECT sequence, event, data
+        FROM yolop_runtime_run_events
+        WHERE namespace = %s AND run_id = %s
+        ORDER BY sequence
+        """,
+        (namespace, run_id),
+    )
+    return [
+        StoredRunEvent(
+            sequence=row[0],
+            event=row[1],
+            data=json.dumps(row[2], separators=(",", ":")),
+        )
+        for row in await cursor.fetchall()
+    ]
+
+
 async def _run_snapshot(
     connection: AsyncConnection[Any],
     *,
@@ -230,7 +256,11 @@ async def _run_snapshot(
         input_digest=run_input_digest,
         full_messages=full_messages,
         active_messages=active_messages,
-        events=[],
+        events=await _load_run_events(
+            connection,
+            namespace=namespace,
+            run_id=run_id if isinstance(run_id, UUID) else UUID(str(run_id)),
+        ),
     )
 
 
@@ -432,7 +462,13 @@ class PostgresRunOperations:
                         namespace=validated_namespace,
                         row=existing_row,
                     )
-                    if existing.prompt != prompt or existing.input_digest != run_input_digest:
+                    if (
+                        existing.prompt != prompt
+                        or existing.input_digest != run_input_digest
+                        or existing.parent_run_id != validated_parent_id
+                        or existing.relation is not validated_relation
+                        or existing.initiator != initiator
+                    ):
                         raise IdempotencyConflictError(
                             f"Idempotency key {idempotency_key!r} has different input"
                         )

@@ -54,6 +54,7 @@ async def test_postgres_run_events_are_ordered_and_owner_bound(postgres_dsn: str
         assert await store.list_run_events("tenant/acme", claimed.id, after=first.sequence) == [
             second
         ]
+        assert (await store.load_run("tenant/acme", claimed.id)).events == [first, second]
     finally:
         await store.close()
 
