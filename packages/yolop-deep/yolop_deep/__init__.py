@@ -33,6 +33,14 @@ from .forks import (
     ForkCandidateStatus,
 )
 from .goals import GoalRecord, GoalRunner, GoalStatus, GoalStore, GoalVerdict
+from .improvements import (
+    ImprovementProposal,
+    ImprovementProposalError,
+    ImprovementProposalNotFoundError,
+    ImprovementProposalService,
+    ImprovementRevisionConflictError,
+    ProposalStatus,
+)
 from .judging import (
     CandidateAcceptanceError,
     CandidateJudgeError,
@@ -229,6 +237,12 @@ __all__ = [
     "ForkCandidateHandle",
     "ForkCandidateService",
     "ForkCandidateStatus",
+    "ImprovementProposal",
+    "ImprovementProposalError",
+    "ImprovementProposalNotFoundError",
+    "ImprovementProposalService",
+    "ImprovementRevisionConflictError",
+    "ProposalStatus",
     "GoalRecord",
     "GoalRunner",
     "GoalStatus",

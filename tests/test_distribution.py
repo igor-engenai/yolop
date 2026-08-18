@@ -102,6 +102,7 @@ def test_public_package_imports_load() -> None:
             "ChannelMessage",
             "DelegatedTaskCoordinator",
             "ForkCandidateService",
+            "ImprovementProposalService",
             "PlanItem",
             "Planning",
             "SessionPlanStore",

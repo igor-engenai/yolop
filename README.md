@@ -59,6 +59,8 @@ For a durable deep-coding composition, install `yolop[deep]` and load the explic
 
 Use `yolop_deep.GoalRunner` for bounded autonomous continuation. It stores goal state in the RuntimeStore, evaluates only persisted transcript evidence, and represents evaluator and continuation work as normal related Runs. Set a request/token budget, wall deadline, and maximum turns; goal state survives a process restart.
 
+`yolop_deep.ImprovementProposalService` is an optional reviewed-improvement flow. It stores bounded, non-executable proposals and evidence in Session state. A host must explicitly accept a proposal; YoloP never applies AgentSpec changes automatically. Secrets, paths, executable code, provider changes, and capability changes are rejected.
+
 The API key is not part of AgentSpec. Pydantic AI reads `OPENAI_API_KEY` from the environment. An Azure AgentSpec can use `azure:<deployment-name>` with `AZURE_OPENAI_API_KEY` and `AZURE_OPENAI_ENDPOINT`. Legacy Azure endpoints also need `OPENAI_API_VERSION`.
 
 ## Run the terminal host
@@ -286,6 +288,10 @@ Process failure leaves an owned Run in durable `INTERRUPTED` state. YoloP does n
 ### `yolop-delegation`
 
 [`packages/yolop-delegation`](packages/yolop-delegation) provides a namespace-partitioned host catalog of immutable delegate AgentSpecs and a native synchronous delegation capability. Parent AgentSpecs select aliases and tighter bounded limits; the catalog pins each delegate's AgentSpec digest, version, and model identity before the host Runtime creates a child Session and Run. Background child supervision and task teams remain later roadmap work.
+
+### `yolop-deep`
+
+[`packages/yolop-deep`](packages/yolop-deep) provides explicit deep-coding and deep-research presets, candidate workspace forks, bounded candidate judging, and optional reviewed improvement proposals. Delegates, memory, workspace paths, and fork cleanup remain host-authorized resources; experimental forks do not modify the parent Session until explicit acceptance.
 
 ### `yolop-memory`
 
