@@ -49,6 +49,9 @@ async def test_judge_requires_evidence_for_every_candidate(tmp_path: Path) -> No
     candidates, handles = await _make_candidates(
         runtime, source_session_id, source_run_id
     )
+    async def evaluate(_messages: list[ModelMessage], _info: AgentInfo) -> AsyncIterator[str]:
+        yield "not used"
+
     judge = CandidateJudgeService(runtime, candidates=candidates, max_evidence_bytes=180)
 
     with raises(CandidateJudgeError, match="evidence"):
@@ -58,7 +61,7 @@ async def test_judge_requires_evidence_for_every_candidate(tmp_path: Path) -> No
             source_run_id,
             candidate_keys=[handle.candidate_key for handle in handles],
             evaluator_spec=AgentSpec(model="evaluator:model"),
-            evaluator_model=FunctionModel(stream_function=lambda _messages, _info: None),
+            evaluator_model=FunctionModel(stream_function=evaluate),
             evaluator_model_id="evaluator:model",
             deps=None,
             deps_type=type(None),
