@@ -376,7 +376,9 @@ async def test_codex_model_refreshes_after_a_401_and_retries_once(tmp_path: Path
         f"Bearer {old_token}",
         f"Bearer {new_token}",
     ]
-    assert store.load_oauth("openai-codex").access_token.get_secret_value() == new_token
+    refreshed = store.load_oauth("openai-codex")
+    assert refreshed is not None
+    assert refreshed.access_token.get_secret_value() == new_token
 
 
 async def test_codex_model_does_not_refresh_after_a_non_401_error(tmp_path: Path) -> None:
