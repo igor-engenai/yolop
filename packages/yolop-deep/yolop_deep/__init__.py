@@ -33,6 +33,13 @@ from .forks import (
     ForkCandidateStatus,
 )
 from .goals import GoalRecord, GoalRunner, GoalStatus, GoalStore, GoalVerdict
+from .judging import (
+    CandidateAcceptanceError,
+    CandidateJudgeError,
+    CandidateJudgeService,
+    CandidateJudgment,
+    CandidateVerdict,
+)
 from .workspaces import (
     CandidateWorkspaceHandle,
     CandidateWorkspaceLimitError,
@@ -195,11 +202,16 @@ def load_deep_coding_spec(*, catalog: ProviderCatalog | None = None) -> AgentSpe
 
 
 __all__ = [
+    "CandidateAcceptanceError",
     "CandidateConflictError",
+    "CandidateJudgeError",
+    "CandidateJudgeService",
+    "CandidateJudgment",
     "CandidateLimitError",
     "CandidateNotFoundError",
     "CandidateWorkspaceHandle",
     "CandidateWorkspaceLimitError",
+    "CandidateVerdict",
     "CandidateWorkspaceService",
     "ForkCandidateHandle",
     "ForkCandidateService",
