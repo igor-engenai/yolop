@@ -11,15 +11,6 @@ model_settings:
   thinking: high
 
 capabilities:
-  - Context: {}
-  - Compaction:
-      target_tokens: 12000
-      keep_tool_pairs: 3
-      file_tools:
-        - read_file
-      include_summarizer: true
-      receipts: true
-      incremental: true
   - Planning:
       enable_subtasks: true
       tools:
@@ -33,7 +24,8 @@ capabilities:
         - set_dependency
         - get_available_tasks
   - StuckLoop: {}
-  - WarnNearLimits: {}
+  - WarnNearLimits:
+      max_context_fraction: 0.8
   - Workspace:
       shell: true
       allowed_commands:

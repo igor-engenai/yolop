@@ -43,4 +43,5 @@ capabilities:
         - set_dependency
         - get_available_tasks
   - StuckLoop: {}
-  - WarnNearLimits: {}
+  - WarnNearLimits:
+      max_context_fraction: 0.8

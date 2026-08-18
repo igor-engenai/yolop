@@ -2,9 +2,12 @@ from importlib.metadata import requires
 from pathlib import Path
 
 import pytest
-from pydantic_ai import AgentSpec
+from pydantic_ai import Agent, AgentSpec
+from pydantic_ai.models.test import TestModel
 from yolop_tui import __file__ as package_file
 from yolop_tui.cli import main
+
+from yolop import Yolop
 
 
 def test_bundled_default_is_a_high_thinking_workspace_coding_agent() -> None:
@@ -15,8 +18,15 @@ def test_bundled_default_is_a_high_thinking_workspace_coding_agent() -> None:
     assert spec.model_settings == {"thinking": "high"}
     assert isinstance(spec.instructions, str)
     assert "coding agent" in spec.instructions
-    assert [capability.name for capability in spec.capabilities] == ["Workspace"]
-    workspace = spec.capabilities[0]
+    assert [capability.name for capability in spec.capabilities] == [
+        "Planning",
+        "StuckLoop",
+        "WarnNearLimits",
+        "Workspace",
+    ]
+    workspace = next(
+        capability for capability in spec.capabilities if capability.name == "Workspace"
+    )
     assert workspace.arguments == {
         "shell": True,
         "allowed_commands": [
@@ -37,6 +47,19 @@ def test_bundled_default_is_a_high_thinking_workspace_coding_agent() -> None:
             "just",
         ],
     }
+
+
+def test_bundled_default_constructs_with_installed_capabilities() -> None:
+    spec = AgentSpec.from_file(Path(package_file).parent / "agent_specs" / "coding.yaml")
+    yolop = Yolop()
+    capabilities = yolop.resolve_capabilities(spec)
+
+    Agent.from_spec(
+        spec,
+        model=TestModel(),
+        custom_capability_types=capabilities.selected_types,
+        capabilities=capabilities.enforced_capabilities,
+    )
 
 
 def test_tui_distribution_installs_textual_and_the_default_workspace() -> None:
