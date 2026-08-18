@@ -484,9 +484,7 @@ class PostgresStateOperations:
         validated_scope = _state_scope(scope)
         validated_scope_id = validate_session_id(scope_id)
         validated_kind = _state_text(state_kind, "state_kind")
-        if schema_version is not None and (
-            isinstance(schema_version, bool) or schema_version < 1
-        ):
+        if schema_version is not None and (isinstance(schema_version, bool) or schema_version < 1):
             raise StateSchemaError("State schema version must be positive")
         async with self._pool.connection() as connection:
             cursor = await connection.execute(

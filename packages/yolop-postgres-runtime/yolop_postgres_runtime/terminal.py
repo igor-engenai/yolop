@@ -568,9 +568,7 @@ class PostgresTerminalOperations:
                 else:
                     cursor = await connection.execute(
                         _RUN_SELECT
-                        + sql.SQL(
-                            "WHERE status = 'running' AND lease_expires_at <= %s FOR UPDATE"
-                        ),
+                        + sql.SQL("WHERE status = 'running' AND lease_expires_at <= %s FOR UPDATE"),
                         (expired_before,),
                     )
                 rows = await cursor.fetchall()

@@ -121,9 +121,7 @@ async def test_openapi_operation_can_disable_global_security() -> None:
 
     public_document = document()
     public_document["components"] = {
-        "securitySchemes": {
-            "apiKey": {"type": "apiKey", "in": "header", "name": "X-Key"}
-        }
+        "securitySchemes": {"apiKey": {"type": "apiKey", "in": "header", "name": "X-Key"}}
     }
     public_document["security"] = [{"apiKey": []}]
     public_document["paths"]["/users/{id}"]["get"]["security"] = []
@@ -161,9 +159,7 @@ async def test_openapi_security_requirement_applies_all_schemes() -> None:
             "queryKey": {"type": "apiKey", "in": "query", "name": "api_key"},
         }
     }
-    secured_document["paths"]["/users"]["post"]["security"] = [
-        {"headerKey": [], "queryKey": []}
-    ]
+    secured_document["paths"]["/users"]["post"]["security"] = [{"headerKey": [], "queryKey": []}]
     client = SafeHttpClient(
         EgressPolicy(allowed_hosts=frozenset({"api.example.com"})),
         transport=httpx.MockTransport(respond),
@@ -211,9 +207,7 @@ async def test_openapi_standard_http_basic_authentication() -> None:
         document=basic_document,
         server_url="https://api.example.com",
         allowed_operations=frozenset({"get_user"}),
-        security_schemes={
-            "basicAuth": {"secret_ref": "kv/password", "username": "ada"}
-        },
+        security_schemes={"basicAuth": {"secret_ref": "kv/password", "username": "ada"}},
     )
     caller = OpenAPICaller(service, client, secret_resolver=lambda _ref: "password")
     try:
@@ -238,9 +232,7 @@ async def test_openapi_write_requires_approval_and_resolves_api_key() -> None:
     )
     write_document = document()
     write_document["components"] = {
-        "securitySchemes": {
-            "apiKey": {"type": "apiKey", "in": "header", "name": "X-Key"}
-        }
+        "securitySchemes": {"apiKey": {"type": "apiKey", "in": "header", "name": "X-Key"}}
     }
     write_document["paths"]["/users"]["post"]["security"] = [{"apiKey": []}]
     service = OpenAPIServiceConfig(

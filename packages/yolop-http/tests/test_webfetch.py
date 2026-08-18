@@ -71,9 +71,7 @@ async def test_webfetch_rejects_binary_content_and_bounds_text() -> None:
         content=b"abcdef",
         request=httpx.Request("GET", "https://example.com"),
     )
-    result = await (await _run_fetch(text, max_text_chars=4)).fetch_web(
-        "https://example.com"
-    )
+    result = await (await _run_fetch(text, max_text_chars=4)).fetch_web("https://example.com")
     assert result["truncated"] is True
     assert result["content"] == "abcd"
 

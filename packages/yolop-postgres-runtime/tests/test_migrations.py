@@ -12,9 +12,7 @@ from yolop_postgres_runtime import CURRENT_SCHEMA_VERSION, migrate
 
 def _database_conninfo(dsn: str, database: str) -> str:
     parameters = {
-        key: str(value)
-        for key, value in conninfo_to_dict(dsn).items()
-        if value is not None
+        key: str(value) for key, value in conninfo_to_dict(dsn).items() if value is not None
     }
     parameters["dbname"] = database
     return make_conninfo(**parameters)

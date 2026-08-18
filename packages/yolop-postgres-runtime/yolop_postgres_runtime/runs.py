@@ -445,14 +445,10 @@ class PostgresRunOperations:
                 if await session_cursor.fetchone() is None:
                     from yolop_runtime import SessionNotFoundError
 
-                    raise SessionNotFoundError(
-                        f"Session {validated_session_id!r} does not exist"
-                    )
+                    raise SessionNotFoundError(f"Session {validated_session_id!r} does not exist")
                 existing_cursor = await connection.execute(
                     _RUN_SELECT
-                    + sql.SQL(
-                        "WHERE namespace = %s AND session_id = %s AND idempotency_key = %s"
-                    ),
+                    + sql.SQL("WHERE namespace = %s AND session_id = %s AND idempotency_key = %s"),
                     (validated_namespace, session_uuid, idempotency_key),
                 )
                 existing_row = await existing_cursor.fetchone()
@@ -508,13 +504,10 @@ class PostgresRunOperations:
                     )
                     parent_row = await parent_cursor.fetchone()
                     if parent_row is None:
-                        raise RunNotFoundError(
-                            f"Parent Run {validated_parent_id!r} does not exist"
-                        )
+                        raise RunNotFoundError(f"Parent Run {validated_parent_id!r} does not exist")
                     effective_root_id = parent_row[1]
-                    if (
-                        validated_root_id is not None
-                        and validated_root_id != str(effective_root_id)
+                    if validated_root_id is not None and validated_root_id != str(
+                        effective_root_id
                     ):
                         raise ValueError("Related Run root does not match its parent")
                     budget_cursor = await connection.execute(

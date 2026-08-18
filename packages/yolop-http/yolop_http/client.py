@@ -30,8 +30,10 @@ def _redirect_request(
 ) -> tuple[str, Mapping[str, str] | None, bytes | str | None]:
     normalized_method = method.upper()
     switch_to_get = (
-        status_code == 303 and normalized_method != "HEAD"
-    ) or status_code in {301, 302} and normalized_method == "POST"
+        (status_code == 303 and normalized_method != "HEAD")
+        or status_code in {301, 302}
+        and normalized_method == "POST"
+    )
     if not switch_to_get:
         return method, headers, content
     body_headers = {"content-length", "content-type", "transfer-encoding"}

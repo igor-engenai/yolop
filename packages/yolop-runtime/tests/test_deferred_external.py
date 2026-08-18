@@ -45,11 +45,7 @@ def model() -> FunctionModel:
     async def respond(
         messages: list[ModelMessage], _info: AgentInfo
     ) -> AsyncIterator[str | dict[int, DeltaToolCall]]:
-        if any(
-            isinstance(part, ToolReturnPart)
-            for message in messages
-            for part in message.parts
-        ):
+        if any(isinstance(part, ToolReturnPart) for message in messages for part in message.parts):
             yield "resumed"
         else:
             yield {

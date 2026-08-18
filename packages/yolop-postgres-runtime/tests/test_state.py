@@ -79,13 +79,16 @@ async def test_postgres_scoped_state_isolated_by_namespace(postgres_dsn: str) ->
             payload={"count": 1},
         )
 
-        assert await store.read_state(
-            "tenant/beta",
-            owner_id="plugin.counter",
-            scope=StateScope.SESSION,
-            scope_id=session.id,
-            state_kind="counter",
-            schema_version=1,
-        ) == []
+        assert (
+            await store.read_state(
+                "tenant/beta",
+                owner_id="plugin.counter",
+                scope=StateScope.SESSION,
+                scope_id=session.id,
+                state_kind="counter",
+                schema_version=1,
+            )
+            == []
+        )
     finally:
         await store.close()

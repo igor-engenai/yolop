@@ -67,11 +67,7 @@ def test_registry_rejects_invalid_document_and_server() -> None:
             alias="bad",
             document={
                 **DOCUMENT,
-                "paths": {
-                    "/users": {
-                        "get": {"responses": {"200": {"description": "missing id"}}}
-                    }
-                },
+                "paths": {"/users": {"get": {"responses": {"200": {"description": "missing id"}}}}},
             },
             server_url="https://api.example.com",
         )
@@ -114,18 +110,12 @@ def test_registry_rejects_unknown_and_forbidden_aliases() -> None:
 def test_registry_intersects_agent_selection_with_host_allowlist_and_is_stable() -> None:
     registry = OpenAPIRegistry([service(allowed_operations=frozenset({"list_users"}))])
     composition = registry.build_for_spec(
-        {
-            "metadata": {
-                "openapi": [{"alias": "crm", "operations": ["list_users"]}]
-            }
-        }
+        {"metadata": {"openapi": [{"alias": "crm", "operations": ["list_users"]}]}}
     )
     explorer = composition.capabilities[0]
     assert isinstance(explorer, OpenAPIExplorer)
 
-    assert explorer.catalog == (
-        {"operation_id": "list_users", "method": "GET", "path": "/users"},
-    )
+    assert explorer.catalog == ({"operation_id": "list_users", "method": "GET", "path": "/users"},)
 
     with raises(OpenAPIOperationError):
         registry.build_for_spec(

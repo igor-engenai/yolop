@@ -59,9 +59,7 @@ class OpenAPICaller:
         cookie_values = dict(cookies or {})
         path_template = operation["path"]
         parameter_specs = _parameters(self.service.document, path_template, operation_id)
-        declared = {
-            (str(parameter["name"]), str(parameter["in"])) for parameter in parameter_specs
-        }
+        declared = {(str(parameter["name"]), str(parameter["in"])) for parameter in parameter_specs}
         supplied = {
             (str(name), location)
             for location, values in (
@@ -89,9 +87,7 @@ class OpenAPICaller:
                 continue
             value = values[name]
             if location == "path":
-                path_template = path_template.replace(
-                    "{" + name + "}", quote(str(value), safe="")
-                )
+                path_template = path_template.replace("{" + name + "}", quote(str(value), safe=""))
             elif location == "query":
                 query_values[name] = value
             elif location == "header":
@@ -156,9 +152,11 @@ class OpenAPICaller:
         if not isinstance(requirement, Mapping) or not requirement:
             raise OpenAPISecretError("OpenAPI security requirement is invalid")
         for scheme_name in requirement:
-            scheme = self.service.document.get("components", {}).get(
-                "securitySchemes", {}
-            ).get(scheme_name)
+            scheme = (
+                self.service.document.get("components", {})
+                .get("securitySchemes", {})
+                .get(scheme_name)
+            )
             config = self.service.security_schemes.get(scheme_name, {})
             if not isinstance(scheme, Mapping):
                 raise OpenAPISecretError("OpenAPI security scheme is missing")
@@ -183,13 +181,11 @@ class OpenAPICaller:
                     cookies[str(name)] = secret
                 else:
                     raise OpenAPISecretError("OpenAPI API key location is invalid")
-            elif scheme_type == "basic" or (
-                scheme_type == "http" and http_scheme == "basic"
-            ):
+            elif scheme_type == "basic" or (scheme_type == "http" and http_scheme == "basic"):
                 username = str(config.get("username", ""))
-                headers["Authorization"] = "Basic " + base64.b64encode(
-                    f"{username}:{secret}".encode()
-                ).decode()
+                headers["Authorization"] = (
+                    "Basic " + base64.b64encode(f"{username}:{secret}".encode()).decode()
+                )
             else:
                 headers["Authorization"] = f"Bearer {secret}"
         return headers

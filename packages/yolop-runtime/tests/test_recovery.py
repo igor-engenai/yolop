@@ -37,9 +37,7 @@ async def test_interrupted_run_requires_explicit_idempotent_retry(tmp_path, prom
     assert await store.interrupt_owned_runs("worker-1") == 1
     assert (await store.load_run("test", claimed.id)).status is RunStatus.INTERRUPTED
 
-    async def respond(
-        messages: list[ModelMessage], _info: AgentInfo
-    ) -> AsyncIterator[str]:
+    async def respond(messages: list[ModelMessage], _info: AgentInfo) -> AsyncIterator[str]:
         assert any(
             isinstance(part, UserPromptPart) and part.content == prompt
             for message in messages

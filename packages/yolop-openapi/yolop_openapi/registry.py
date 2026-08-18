@@ -59,8 +59,13 @@ class OpenAPIServiceConfig:
         if not str(document.get("openapi", "")).startswith("3."):
             raise OpenAPIConfigurationError("Only OpenAPI 3 documents are supported")
         servers = document.get("servers")
-        if not isinstance(servers, Sequence) or isinstance(servers, (str, bytes)) or not any(
-            isinstance(server, dict) and server.get("url") == self.server_url for server in servers
+        if (
+            not isinstance(servers, Sequence)
+            or isinstance(servers, (str, bytes))
+            or not any(
+                isinstance(server, dict) and server.get("url") == self.server_url
+                for server in servers
+            )
         ):
             raise OpenAPIServerError("Configured server is not present in the pinned document")
         operations = _operations(document)
@@ -194,9 +199,7 @@ def _selections_from_spec(spec: AgentSpec | Mapping[str, Any]) -> tuple[OpenAPIS
             selections.append(
                 OpenAPISelection(
                     alias=item["alias"],
-                    allowed_operations=(
-                        frozenset(operations) if operations is not None else None
-                    ),
+                    allowed_operations=(frozenset(operations) if operations is not None else None),
                 )
             )
         else:

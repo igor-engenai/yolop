@@ -226,9 +226,7 @@ async def migrate(dsn: str, *, target_version: int | None = None) -> int:
             row = await cursor.fetchone()
             current = 0 if row is None else row[0]
             if current > target:
-                raise ValueError(
-                    f"Database schema version {current} is newer than target {target}"
-                )
+                raise ValueError(f"Database schema version {current} is newer than target {target}")
 
             for migration in MIGRATIONS:
                 if migration.version <= current or migration.version > target:
