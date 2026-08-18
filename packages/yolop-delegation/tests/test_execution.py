@@ -11,8 +11,8 @@ from pytest import raises
 from test_delegation import definition
 from yolop_delegation import (
     DelegateCatalog,
-    DelegateRequest,
     DelegatePolicyError,
+    DelegateRequest,
     DelegateResult,
     RuntimeDelegateExecutor,
     bounded_idempotency_key,
