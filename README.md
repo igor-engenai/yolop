@@ -22,9 +22,12 @@ You can install smaller feature sets instead:
 
 - `uv add "yolop[workspace]"` installs the Workspace capability.
 - `uv add "yolop[duckdb]"` installs the DuckDB capability.
+- `uv add "yolop[http]"` installs safe bounded outbound HTTP.
+- `uv add "yolop[openapi]"` installs host-authorized OpenAPI exploration and calls.
 - `uv add "yolop[mcp]"` installs host-authorized MCP transport support.
 - `uv add "yolop[memory]"` installs scoped persistent memory support.
 - `uv add "yolop[web]"` installs the web host and its runtime persistence.
+- `uv add "yolop[postgres-runtime]"` installs the PostgreSQL RuntimeStore and migration tools.
 - `uv add "yolop[tui,openai]"` installs the terminal host and OpenAI API support.
 - `uv add "yolop[tui,providers]"` installs the terminal host and optional YoloP providers.
 - `uv add "yolop[openai]"` installs OpenAI API support.
@@ -264,9 +267,15 @@ Hosts can resolve immutable skill libraries with `resolve_skill_libraries(...)`.
 
 [`packages/yolop-runtime`](packages/yolop-runtime) provides the host-neutral durable `Runtime` facade and one storage-independent `RuntimeStore` protocol. It owns namespaced session and run values, execution scopes and pins, durable event values, stable errors, generated identity helpers, and generic runtime dependencies. It depends on the core `yolop` kernel, but not on SQLite or host frameworks.
 
+Process failure leaves an owned Run in durable `INTERRUPTED` state. YoloP does not retry automatically. Hosts can call `Runtime.retry_interrupted_run(...)` to create one explicit, idempotent continuation from the committed parent checkpoint.
+
 ### `yolop-sqlite-session`
 
 [`packages/yolop-sqlite-session`](packages/yolop-sqlite-session) implements `RuntimeStore` with SQLite. It provides atomic session/run completion, revision checks, idempotent run reservation, ordered events, worker leases, namespace isolation, and cross-worker file locks. It is the default web-server store.
+
+### `yolop-postgres-runtime`
+
+[`packages/yolop-postgres-runtime`](packages/yolop-postgres-runtime) provides the production PostgreSQL connection boundary and normalized YoloP Runtime schema. Run `yolop_postgres_runtime.migrate(dsn)` as an explicit deployment operation before opening `PostgresRuntimeStore`; the store never runs migrations during construction or pool startup.
 
 ### `yolop-mcp`
 
@@ -293,6 +302,14 @@ It also provides `ProjectContextRegistry`. Hosts map safe logical aliases to bou
 ### `yolop-duckdb`
 
 [`packages/yolop-duckdb`](packages/yolop-duckdb) is a separate capability plugin. It owns the DuckDB dependency, resolves a host-provided read-only connection, and exposes the bounded `query_duckdb` model tool.
+
+### `yolop-http`
+
+[`packages/yolop-http`](packages/yolop-http) provides host-owned outbound HTTP with scheme/port policy, DNS address validation, validated-address connection pinning with original TLS hostname preservation, disabled redirects by default, bounded timeouts, and response limits. Its `WebFetch` capability exposes bounded public text retrieval through the host client. It is not an arbitrary model request tool.
+
+### `yolop-openapi`
+
+[`packages/yolop-openapi`](packages/yolop-openapi) validates pinned OpenAPI 3 documents, resolves host-authorized aliases, intersects AgentSpec operation narrowing with host allowlists, and exposes deterministic `<alias>__explore` capability toolsets. Raw specifications, servers, and secrets remain host-owned.
 
 ### `yolop-workspace`
 

@@ -12,6 +12,12 @@ from pydantic_ai import AgentSpec, AgentStreamEvent
 from pydantic_ai.messages import ModelMessage, ModelRequest, UserContent, UserPromptPart
 from pydantic_ai.usage import RunUsage
 
+from .events import (
+    AllEventsPersistencePolicy,
+    RuntimeEventPersistencePolicy,
+    SparseEventPersistencePolicy,
+)
+
 
 class InvalidNamespaceError(ValueError):
     """A runtime namespace is not a valid opaque host value."""
@@ -800,6 +806,9 @@ __all__ = [
     "RuntimeCompactor",
     "RuntimeContextSink",
     "RuntimeEventSink",
+    "RuntimeEventPersistencePolicy",
+    "AllEventsPersistencePolicy",
+    "SparseEventPersistencePolicy",
     "RuntimeFollowUpSink",
     "RuntimeStore",
     "Runtime",

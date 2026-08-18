@@ -5,7 +5,7 @@ from pydantic_ai.capabilities import Capability
 from pydantic_ai.messages import ModelMessage, ModelRequest, ToolReturnPart
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, DeltaToolCalls, FunctionModel
 from pytest import raises
-from yolop_runtime import Runtime
+from yolop_runtime import IdempotencyConflictError, Runtime
 from yolop_sqlite_session import SQLiteRuntimeStore
 
 from yolop import CapabilityPolicyConflictError, ToolAuditRecord, ToolPolicy, Yolop
@@ -234,6 +234,21 @@ async def test_runtime_preserves_native_approval_resume_operation(tmp_path) -> N
 
     assert resumed.run.output == "resumed"
     assert calls == ["approved-value"]
+
+    with raises(IdempotencyConflictError):
+        await runtime.resume_deferred_run(
+            "test",
+            session.id,
+            pending.run.id,
+            approvals={"runtime-approval": False},
+            spec=spec,
+            model=FunctionModel(stream_function=respond),
+            model_id="test:model",
+            deps=None,
+            deps_type=type(None),
+            mandatory_capabilities=[tools],
+            idempotency_key="approval-resume",
+        )
 
 
 async def test_host_policy_denies_tool_call_with_safe_reason() -> None:

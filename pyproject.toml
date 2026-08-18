@@ -18,7 +18,10 @@ workspace = ["yolop-workspace>=0.1.0,<0.2.0"]
 context = ["yolop-context>=0.1.0,<0.2.0"]
 deep = ["yolop-deep>=0.1.0,<0.2.0"]
 duckdb = ["yolop-duckdb>=0.1.0,<0.2.0"]
+http = ["yolop-http>=0.1.0,<0.2.0"]
 mcp = ["yolop-mcp>=0.1.0,<0.2.0"]
+openapi = ["yolop-openapi>=0.1.0,<0.2.0"]
+postgres-runtime = ["yolop-postgres-runtime>=0.1.0,<0.2.0"]
 memory = ["yolop-memory>=0.1.0,<0.2.0"]
 web = ["yolop-webserver>=0.1.0,<0.2.0"]
 tui = ["yolop-tui>=0.1.0,<0.2.0"]
@@ -27,11 +30,14 @@ providers = ["yolop-providers>=0.1.0,<0.2.0"]
 all = [
     "pydantic-ai-slim[openai]>=2.31.0",
     "yolop-context>=0.1.0,<0.2.0",
+    "yolop-http>=0.1.0,<0.2.0",
     "yolop-deep>=0.1.0,<0.2.0",
     "yolop-duckdb>=0.1.0,<0.2.0",
     "yolop-mcp>=0.1.0,<0.2.0",
     "yolop-memory>=0.1.0,<0.2.0",
+    "yolop-openapi>=0.1.0,<0.2.0",
     "yolop-providers>=0.1.0,<0.2.0",
+    "yolop-postgres-runtime>=0.1.0,<0.2.0",
     "yolop-runtime>=0.1.0,<0.2.0",
     "yolop-sqlite-session>=0.1.0,<0.2.0",
     "yolop-tui>=0.1.0,<0.2.0",
@@ -57,6 +63,9 @@ dev = [
     "yolop-duckdb",
     "yolop-mcp",
     "yolop-memory",
+    "yolop-http",
+    "yolop-openapi",
+    "yolop-postgres-runtime",
     "yolop-providers",
     "yolop-runtime",
     "yolop-sqlite-session",
@@ -76,6 +85,9 @@ yolop-deep = { workspace = true }
 yolop-duckdb = { workspace = true }
 yolop-mcp = { workspace = true }
 yolop-memory = { workspace = true }
+yolop-http = { workspace = true }
+yolop-openapi = { workspace = true }
+yolop-postgres-runtime = { workspace = true }
 yolop-providers = { workspace = true }
 yolop-runtime = { workspace = true }
 yolop-sqlite-session = { workspace = true }
@@ -91,6 +103,9 @@ members = [
     "packages/yolop-duckdb",
     "packages/yolop-mcp",
     "packages/yolop-memory",
+    "packages/yolop-http",
+    "packages/yolop-openapi",
+    "packages/yolop-postgres-runtime",
     "packages/yolop-providers",
     "packages/yolop-runtime",
     "packages/yolop-sqlite-session",
@@ -110,6 +125,9 @@ testpaths = [
     "packages/yolop-duckdb/tests",
     "packages/yolop-mcp/tests",
     "packages/yolop-memory/tests",
+    "packages/yolop-http/tests",
+    "packages/yolop-openapi/tests",
+    "packages/yolop-postgres-runtime/tests",
     "packages/yolop-providers/tests",
     "packages/yolop-runtime/tests",
     "packages/yolop-sqlite-session/tests",

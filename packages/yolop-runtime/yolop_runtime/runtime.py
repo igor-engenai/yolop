@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
+from hashlib import sha256
 from typing import Any
 from uuid import uuid4
 
@@ -20,10 +22,10 @@ from pydantic_ai.usage import UsageLimits
 from yolop import ProviderCatalog, Yolop
 
 from . import (
+    AllEventsPersistencePolicy,
     CompactionUnsupportedError,
     ExecutionPin,
     ExecutionScope,
-    HostDepsT,
     IdempotencyConflictError,
     RunCompletion,
     RunRelation,
@@ -35,6 +37,7 @@ from . import (
     RuntimeContextSink,
     RuntimeDeadlineExceededError,
     RuntimeDeps,
+    RuntimeEventPersistencePolicy,
     RuntimeEventSink,
     RuntimeFollowUpSink,
     RuntimeRunSnapshot,
@@ -69,6 +72,7 @@ class Runtime[HostDepsT]:
         session_lock_timeout: float = 30.0,
         lease_seconds: float = 60.0,
         clock: Callable[[], datetime] | None = None,
+        event_persistence_policy: RuntimeEventPersistencePolicy | None = None,
     ) -> None:
         if session_lock_timeout <= 0:
             raise ValueError("Session lock timeout must be positive")
@@ -79,6 +83,7 @@ class Runtime[HostDepsT]:
         self.session_lock_timeout = session_lock_timeout
         self.lease_seconds = lease_seconds
         self.clock = clock or (lambda: datetime.now(UTC))
+        self.event_persistence_policy = event_persistence_policy or AllEventsPersistencePolicy()
 
     async def create_session(
         self,
@@ -191,6 +196,7 @@ class Runtime[HostDepsT]:
         idempotency_key: str,
         max_pending: int | None = None,
         initiator: str = "user",
+        input_digest: str | None = None,
     ) -> RunReservation:
         """Admit one Run and persist its ancestry and initial history."""
         self.kernel.provider_catalog.validate_spec(spec)
@@ -247,6 +253,7 @@ class Runtime[HostDepsT]:
             relation=effective_relation,
             root_budget=root_budget,
             initiator=initiator,
+            input_digest=input_digest,
             full_messages=base_full_messages,
             active_messages=base_active_messages,
         )
@@ -276,6 +283,7 @@ class Runtime[HostDepsT]:
         follow_up_sink: RuntimeFollowUpSink | None = None,
         max_pending: int | None = None,
         initiator: str = "user",
+        input_digest: str | None = None,
     ) -> RunCompletion:
         """Execute one durable run and return its terminal state and session."""
         reservation = await self.reserve_run(
@@ -292,6 +300,7 @@ class Runtime[HostDepsT]:
             idempotency_key=idempotency_key,
             max_pending=max_pending,
             initiator=initiator,
+            input_digest=input_digest,
         )
         if not reservation.created:
             if reservation.run.status in _TERMINAL_STATUSES:
@@ -423,6 +432,7 @@ class Runtime[HostDepsT]:
                             owner_id=owner_id,
                             event_sink=event_sink,
                             context_sink=context_sink,
+                            event_persistence_policy=self.event_persistence_policy,
                         ),
                         deps=runtime_deps,
                         deps_type=RuntimeDeps,
@@ -569,13 +579,60 @@ class Runtime[HostDepsT]:
         session = await self.store.load_session(namespace, run.session_id)
         return RunCompletion(session=session, run=run)
 
+    async def retry_interrupted_run(
+        self,
+        namespace: str,
+        session_id: str,
+        run_id: str,
+        *,
+        spec: AgentSpec | dict[str, Any],
+        model: Model | KnownModelName | str | None = None,
+        model_id: str | None = None,
+        execution_pin: ExecutionPin | None = None,
+        deps: HostDepsT,
+        deps_type: type[HostDepsT],
+        output_type: Any = str,
+        mandatory_capabilities: Sequence[AbstractCapability[Any]] = (),
+        idempotency_key: str,
+        event_sink: RuntimeEventSink | None = None,
+        context_sink: RuntimeContextSink | None = None,
+        follow_up_sink: RuntimeFollowUpSink | None = None,
+    ) -> RunCompletion:
+        """Explicitly continue an interrupted Run; process failure never retries automatically."""
+        pending = await self.store.load_run(namespace, run_id)
+        if pending.session_id != session_id:
+            raise RunStateError(f"Run {run_id!r} belongs to another Session")
+        if pending.status is not RunStatus.INTERRUPTED:
+            raise RunStateError(f"Run {run_id!r} is not interrupted")
+        return await self.run_related(
+            namespace,
+            session_id,
+            None,
+            parent_run_id=run_id,
+            relation=RunRelation.CONTINUATION,
+            spec=spec,
+            model=model,
+            model_id=model_id,
+            execution_pin=execution_pin,
+            deps=deps,
+            deps_type=deps_type,
+            output_type=output_type,
+            mandatory_capabilities=mandatory_capabilities,
+            idempotency_key=idempotency_key,
+            event_sink=event_sink,
+            context_sink=context_sink,
+            follow_up_sink=follow_up_sink,
+        )
+
     async def resume_deferred_run(
         self,
         namespace: str,
         session_id: str,
         run_id: str,
         *,
-        approvals: Mapping[str, bool | ToolApproved | ToolDenied],
+        approvals: Mapping[str, bool | ToolApproved | ToolDenied] | None = None,
+        calls: Mapping[str, Any] | None = None,
+        metadata: Mapping[str, Mapping[str, Any]] | None = None,
         spec: AgentSpec | dict[str, Any],
         model: Model | KnownModelName | str | None = None,
         model_id: str | None = None,
@@ -608,9 +665,18 @@ class Runtime[HostDepsT]:
             deps=deps,
             deps_type=deps_type,
             output_type=output_type,
-            deferred_tool_results=DeferredToolResults(approvals=dict(approvals)),
+            deferred_tool_results=DeferredToolResults(
+                approvals=dict(approvals or {}),
+                calls=dict(calls or {}),
+                metadata={key: dict(value) for key, value in (metadata or {}).items()},
+            ),
             mandatory_capabilities=mandatory_capabilities,
             idempotency_key=idempotency_key,
+            input_digest=_deferred_result_digest(
+                calls=calls,
+                approvals=approvals,
+                metadata=metadata,
+            ),
             event_sink=event_sink,
             context_sink=context_sink,
             follow_up_sink=follow_up_sink,
@@ -822,6 +888,7 @@ def _event_handler(
     owner_id: str,
     event_sink: RuntimeEventSink | None,
     context_sink: RuntimeContextSink | None,
+    event_persistence_policy: RuntimeEventPersistencePolicy,
 ) -> EventStreamHandler[Any]:
     async def handle(context: Any, events: Any) -> None:
         if context_sink is not None:
@@ -829,13 +896,14 @@ def _event_handler(
         async for event in events:
             if event_sink is not None:
                 await event_sink.emit(event)
-            await store.append_run_event(
-                namespace,
-                run_id,
-                owner_id=owner_id,
-                event=event.event_kind,
-                data=_STREAM_EVENT_ADAPTER.dump_json(event).decode(),
-            )
+            if event_persistence_policy.should_persist(event):
+                await store.append_run_event(
+                    namespace,
+                    run_id,
+                    owner_id=owner_id,
+                    event=event.event_kind,
+                    data=_STREAM_EVENT_ADAPTER.dump_json(event).decode(),
+                )
 
     return handle
 
@@ -883,6 +951,34 @@ def _model_id(
     if isinstance(value, str):
         return _require_model_id(value)
     raise ValueError("model_id is required when the resolved model is not a string reference")
+
+
+def _deferred_result_digest(
+    *,
+    calls: Mapping[str, Any] | None,
+    approvals: Mapping[str, Any] | None,
+    metadata: Mapping[str, Mapping[str, Any]] | None,
+) -> str:
+    payload = {
+        "calls": calls or {},
+        "approvals": approvals or {},
+        "metadata": metadata or {},
+    }
+    encoded = json.dumps(
+        payload,
+        default=_deferred_json_default,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode()
+    return sha256(encoded).hexdigest()
+
+
+def _deferred_json_default(value: Any) -> Any:
+    model_dump = getattr(value, "model_dump", None)
+    if model_dump is not None:
+        return model_dump(mode="json")
+    return str(value)
 
 
 def _require_model_id(model_id: str) -> str:
