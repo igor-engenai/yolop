@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -81,6 +82,84 @@ async def test_fork_candidate_isolated_and_restartable(tmp_path: Path) -> None:
     candidate_run = await runtime.get_run("tenant/acme", completed.candidate_run_id)
     assert candidate_session.pin == source_before.pin
     assert candidate_run.parent_run_id == source_run_id
+
+
+async def test_candidate_start_is_atomic_under_concurrency(tmp_path: Path) -> None:
+    runtime, source_session_id, source_run_id = await setup(tmp_path)
+    service = ForkCandidateService(
+        runtime,
+        model_for_id=lambda model_id: model_id,
+        deps_for_candidate=lambda _record: (None, type(None)),
+        spec_for_pin=lambda _pin: definition_spec(),
+        max_candidates=1,
+    )
+
+    results = await asyncio.gather(
+        *(
+            service.start(
+                "tenant/acme",
+                source_session_id,
+                source_run_id,
+                spec=definition_spec(),
+                model_id="parent:model",
+                prompt="one",
+                candidate_key="candidate-1",
+            )
+            for _ in range(2)
+        )
+    )
+
+    assert results[0] == results[1]
+    assert len(await runtime.list_sessions("tenant/acme")) == 2
+    assert len(await service.list_candidates("tenant/acme", source_session_id, source_run_id)) == 1
+
+
+async def test_candidate_keys_are_scoped_to_source_run(tmp_path: Path) -> None:
+    runtime, source_session_id, source_run_id = await setup(tmp_path)
+    spec = definition_spec()
+
+    async def respond(_messages: list[ModelMessage], _info: AgentInfo) -> AsyncIterator[str]:
+        yield "second checkpoint"
+
+    second = await runtime.run(
+        "tenant/acme",
+        source_session_id,
+        "second work",
+        spec=spec,
+        model=FunctionModel(stream_function=respond),
+        model_id="parent:model",
+        deps=None,
+        deps_type=type(None),
+        parent_run_id=source_run_id,
+        idempotency_key="second",
+    )
+    service = ForkCandidateService(
+        runtime,
+        model_for_id=lambda model_id: model_id,
+        deps_for_candidate=lambda _record: (None, type(None)),
+        spec_for_pin=lambda _pin: spec,
+    )
+
+    first = await service.start(
+        "tenant/acme",
+        source_session_id,
+        source_run_id,
+        spec=spec,
+        model_id="parent:model",
+        prompt="same prompt",
+        candidate_key="same-key",
+    )
+    other = await service.start(
+        "tenant/acme",
+        source_session_id,
+        second.run.id,
+        spec=spec,
+        model_id="parent:model",
+        prompt="same prompt",
+        candidate_key="same-key",
+    )
+
+    assert first.candidate_session_id != other.candidate_session_id
 
 
 async def test_candidate_start_is_idempotent_and_limits_are_host_enforced(tmp_path: Path) -> None:

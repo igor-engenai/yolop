@@ -93,7 +93,7 @@ class _CandidateState:
             namespace=record.namespace,
             session_id=record.source_session_id,
             run_id=record.source_run_id,
-        ).for_session(_FORK_OWNER)
+        ).for_run(_FORK_OWNER)
 
     async def records(self) -> dict[str, _CandidateRecord]:
         entries = await self._state.read(_FORK_STATE_KIND, schema_version=_FORK_SCHEMA_VERSION)
@@ -191,40 +191,42 @@ class ForkCandidateService:
             pin=ExecutionPin.from_spec(validated_spec, model_id=model_id),
         )
         state = _CandidateState(self.runtime, template)
-        records = await state.records()
-        existing = records.get(candidate_key)
-        if existing is not None:
-            if existing.prompt != prompt or existing.pin != template.pin:
-                raise CandidateConflictError("Fork candidate key has different input")
-            return await self._view(existing)
-        if len(records) >= self.max_candidates:
-            raise CandidateLimitError("Fork candidate limit has been reached")
-        candidate_session = await self.runtime.fork_session(
-            namespace,
-            source_session_id,
-            source_run_id,
-            expected_revision=source_session.revision,
-        )
-        reservation = await self.runtime.reserve_run(
-            namespace,
-            candidate_session.id,
-            prompt,
-            spec=validated_spec,
-            model_id=model_id,
-            execution_pin=template.pin,
-            parent_run_id=source_run_id,
-            relation=RunRelation.CHILD,
-            idempotency_key=bounded_idempotency_key("fork", candidate_key),
-            initiator="fork_candidate",
-        )
-        record = template.model_copy(
-            update={
-                "candidate_session_id": candidate_session.id,
-                "candidate_run_id": reservation.run.id,
-            }
-        )
-        await state.write({**records, candidate_key: record})
-        return await self._view(record)
+        async with self.runtime.store.lock_session(namespace, source_session_id, timeout=30):
+            records = await state.records()
+            existing = records.get(candidate_key)
+            if existing is not None:
+                if existing.prompt != prompt or existing.pin != template.pin:
+                    raise CandidateConflictError("Fork candidate key has different input")
+                return await self._view(existing)
+            if len(records) >= self.max_candidates:
+                raise CandidateLimitError("Fork candidate limit has been reached")
+            current_source = await self.runtime.load_session(namespace, source_session_id)
+            candidate_session = await self.runtime.fork_session_locked(
+                namespace,
+                source_session_id,
+                source_run_id,
+                expected_revision=current_source.revision,
+            )
+            reservation = await self.runtime.reserve_run(
+                namespace,
+                candidate_session.id,
+                prompt,
+                spec=validated_spec,
+                model_id=model_id,
+                execution_pin=template.pin,
+                parent_run_id=source_run_id,
+                relation=RunRelation.CHILD,
+                idempotency_key=bounded_idempotency_key("fork", candidate_key),
+                initiator="fork_candidate",
+            )
+            record = template.model_copy(
+                update={
+                    "candidate_session_id": candidate_session.id,
+                    "candidate_run_id": reservation.run.id,
+                }
+            )
+            await state.write({**records, candidate_key: record})
+            return await self._view(record)
 
     async def inspect(self, handle: ForkCandidateHandle) -> ForkCandidateHandle:
         record = await self._record(handle)

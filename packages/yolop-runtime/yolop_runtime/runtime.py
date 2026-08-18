@@ -871,27 +871,43 @@ class Runtime[HostDepsT]:
         expected_revision: str,
     ) -> RuntimeSessionSnapshot:
         """Create a pinned Session starting at a terminal Run's active history."""
+        async with self.store.lock_session(
+            namespace,
+            session_id,
+            timeout=self.session_lock_timeout,
+        ):
+            return await self.fork_session_locked(
+                namespace,
+                session_id,
+                run_id,
+                expected_revision=expected_revision,
+            )
+
+    async def fork_session_locked(
+        self,
+        namespace: str,
+        session_id: str,
+        run_id: str,
+        *,
+        expected_revision: str,
+    ) -> RuntimeSessionSnapshot:
+        """Fork a Session while the caller holds the source Session lock."""
         await self.store.load_session(namespace, session_id)
         selected = await self.store.load_run(namespace, run_id)
         if selected.session_id != session_id:
             raise RunStateError(f"Run {run_id!r} belongs to another Session")
         if selected.status not in _TERMINAL_STATUSES:
             raise RunStateError(f"Run {run_id!r} is not terminal")
-        async with self.store.lock_session(
+        current = await self.store.load_session(namespace, session_id)
+        if current.revision != expected_revision:
+            raise SessionConflictError(f"Session {session_id!r} has changed")
+        fork = await self.store.create_session(namespace, pin=current.pin)
+        return await self.store.replace_session(
             namespace,
-            session_id,
-            timeout=self.session_lock_timeout,
-        ):
-            current = await self.store.load_session(namespace, session_id)
-            if current.revision != expected_revision:
-                raise SessionConflictError(f"Session {session_id!r} has changed")
-            fork = await self.store.create_session(namespace, pin=current.pin)
-            return await self.store.replace_session(
-                namespace,
-                fork.id,
-                expected_revision=fork.revision,
-                messages=selected.active_messages,
-            )
+            fork.id,
+            expected_revision=fork.revision,
+            messages=selected.active_messages,
+        )
 
     async def _terminal_completion(self, namespace: str, run_id: str) -> RunCompletion:
         run = await self.store.load_run(namespace, run_id)

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,6 +36,7 @@ class _WorkspaceRecord(BaseModel):
     candidate_key: str = Field(min_length=1, max_length=255)
     namespace: str
     source_session_id: str
+    source_run_id: str
     candidate_session_id: str
     source_workspace: str
     path: str
@@ -46,6 +49,7 @@ class CandidateWorkspaceHandle:
     namespace: str
     candidate_key: str
     source_session_id: str
+    source_run_id: str
     candidate_session_id: str
     path: Path
 
@@ -57,7 +61,7 @@ class _WorkspaceState:
             namespace=namespace,
             session_id=session_id,
             run_id=run_id,
-        ).for_session(_WORKSPACE_OWNER)
+        ).for_run(_WORKSPACE_OWNER)
 
     async def records(self) -> dict[str, _WorkspaceRecord]:
         entries = await self._state.read(
@@ -98,15 +102,23 @@ class CandidateWorkspaceService:
         *,
         root: str | Path,
         max_candidates: int = 4,
+        max_files: int = 100_000,
+        max_bytes: int = 256 * 1024 * 1024,
     ) -> None:
         if isinstance(max_candidates, bool) or max_candidates < 1:
             raise CandidateWorkspaceLimitError("Candidate workspace limit must be positive")
+        if isinstance(max_files, bool) or max_files < 1:
+            raise CandidateWorkspaceLimitError("Candidate workspace file limit must be positive")
+        if isinstance(max_bytes, bool) or max_bytes < 1:
+            raise CandidateWorkspaceLimitError("Candidate workspace byte limit must be positive")
         self.runtime = runtime
         self.root = Path(root).expanduser().resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         if not self.root.is_dir() or self.root.is_symlink():
             raise WorkspaceIsolationError("Candidate workspace root must be a real directory")
         self.max_candidates = max_candidates
+        self.max_files = max_files
+        self.max_bytes = max_bytes
 
     async def allocate(
         self,
@@ -127,6 +139,7 @@ class CandidateWorkspaceService:
             candidate_key=candidate_key,
             namespace=namespace,
             source_session_id=source_session_id,
+            source_run_id=source_run_id,
             candidate_session_id=candidate_session_id,
             source_workspace=str(source),
             path=str(self._candidate_path(namespace, candidate_session_id)),
@@ -148,7 +161,18 @@ class CandidateWorkspaceService:
             if destination.exists():
                 raise WorkspaceIsolationError("Candidate workspace destination already exists")
             destination.parent.mkdir(parents=True, exist_ok=True)
-            _copy_without_symlinks(source, destination)
+            try:
+                await asyncio.to_thread(
+                    _copy_without_symlinks,
+                    source,
+                    destination,
+                    max_files=self.max_files,
+                    max_bytes=self.max_bytes,
+                )
+            except BaseException:
+                if destination.exists() and not destination.is_symlink():
+                    shutil.rmtree(destination)
+                raise
             await state.write({**records, candidate_key: template})
             return _handle(template)
 
@@ -181,7 +205,7 @@ class CandidateWorkspaceService:
             self.runtime,
             record.namespace,
             record.source_session_id,
-            record.source_session_id,
+            record.source_run_id,
         )
         async with self.runtime.store.lock_session(
             record.namespace, record.source_session_id, timeout=30
@@ -195,6 +219,7 @@ class CandidateWorkspaceService:
             candidate_key=handle.candidate_key,
             namespace=handle.namespace,
             source_session_id=handle.source_session_id,
+            source_run_id=handle.source_run_id,
             candidate_session_id=handle.candidate_session_id,
             source_workspace=str(self.root),
             path=str(handle.path),
@@ -204,10 +229,14 @@ class CandidateWorkspaceService:
                 self.runtime,
                 handle.namespace,
                 handle.source_session_id,
-                handle.source_session_id,
+                handle.source_run_id,
             ).records()
         ).get(handle.candidate_key)
-        if record is None or record.candidate_session_id != template.candidate_session_id:
+        if (
+            record is None
+            or record.source_run_id != handle.source_run_id
+            or record.candidate_session_id != template.candidate_session_id
+        ):
             raise WorkspaceIsolationError("Candidate workspace handle is not available")
         return record
 
@@ -236,18 +265,41 @@ class CandidateWorkspaceService:
             raise WorkspaceIsolationError("Candidate path is outside the authorized root")
 
 
-def _copy_without_symlinks(source: Path, destination: Path) -> None:
-    destination.mkdir(parents=True)
-    for item in source.iterdir():
-        if item.name == ".yolop":
-            continue
-        if item.is_symlink():
-            raise WorkspaceIsolationError("Candidate copy rejects symlink entries")
-        target = destination / item.name
-        if item.is_dir():
-            _copy_without_symlinks(item, target)
-        else:
-            shutil.copy2(item, target)
+def _copy_without_symlinks(
+    source: Path,
+    destination: Path,
+    *,
+    max_files: int,
+    max_bytes: int,
+) -> None:
+    files = 0
+    total_bytes = 0
+
+    def copy_directory(current_source: Path, current_destination: Path) -> None:
+        nonlocal files, total_bytes
+        current_destination.mkdir(parents=True, exist_ok=True)
+        with os.scandir(current_source) as entries:
+            for entry in entries:
+                if entry.name == ".yolop":
+                    continue
+                if entry.is_symlink():
+                    raise WorkspaceIsolationError("Candidate copy rejects symlink entries")
+                target = current_destination / entry.name
+                if entry.is_dir(follow_symlinks=False):
+                    copy_directory(Path(entry.path), target)
+                    continue
+                if not entry.is_file(follow_symlinks=False):
+                    raise WorkspaceIsolationError("Candidate copy rejects special files")
+                size = entry.stat(follow_symlinks=False).st_size
+                if files >= max_files:
+                    raise CandidateWorkspaceLimitError("Candidate workspace file limit reached")
+                if total_bytes + size > max_bytes:
+                    raise CandidateWorkspaceLimitError("Candidate workspace byte limit reached")
+                shutil.copy2(entry.path, target, follow_symlinks=False)
+                files += 1
+                total_bytes += size
+
+    copy_directory(source, destination)
 
 
 def _within(root: Path, path: Path) -> bool:
@@ -263,6 +315,7 @@ def _handle(record: _WorkspaceRecord) -> CandidateWorkspaceHandle:
         namespace=record.namespace,
         candidate_key=record.candidate_key,
         source_session_id=record.source_session_id,
+        source_run_id=record.source_run_id,
         candidate_session_id=record.candidate_session_id,
         path=Path(record.path),
     )

@@ -4,7 +4,11 @@ from pathlib import Path
 
 from pytest import raises
 from test_forks import setup
-from yolop_deep import CandidateWorkspaceService, WorkspaceIsolationError
+from yolop_deep import (
+    CandidateWorkspaceLimitError,
+    CandidateWorkspaceService,
+    WorkspaceIsolationError,
+)
 from yolop_runtime import ExecutionPin, Runtime
 from yolop_sqlite_session import SQLiteRuntimeStore
 
@@ -65,6 +69,43 @@ async def test_candidate_workspace_persists_reconnects_and_cleans_up(tmp_path: P
     assert (
         await restarted.list_workspaces("tenant/acme", source_session.id, source_session.id) == []
     )
+
+
+async def test_candidate_workspace_enforces_copy_limits_and_cleans_partial_output(
+    tmp_path: Path,
+) -> None:
+    runtime, source_session_id, source_run_id = await setup(tmp_path / "runtime")
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "first.txt").write_text("first", encoding="utf-8")
+    (source / "second.txt").write_text("second", encoding="utf-8")
+    service = CandidateWorkspaceService(runtime, root=tmp_path, max_files=1)
+
+    with raises(CandidateWorkspaceLimitError, match="file limit"):
+        await service.allocate(
+            "tenant/acme",
+            source_session_id,
+            source_run_id,
+            candidate_session_id="00000000-0000-4000-8000-000000000003",
+            candidate_key="candidate-limit-files",
+            source_workspace=source,
+        )
+
+    candidates_root = tmp_path / ".yolop" / "candidates"
+    assert not any(candidates_root.rglob("candidate-limit-files"))
+
+    (source / "second.txt").unlink()
+    service = CandidateWorkspaceService(runtime, root=tmp_path, max_bytes=4)
+    with raises(CandidateWorkspaceLimitError, match="byte limit"):
+        await service.allocate(
+            "tenant/acme",
+            source_session_id,
+            source_run_id,
+            candidate_session_id="00000000-0000-4000-8000-000000000004",
+            candidate_key="candidate-limit-bytes",
+            source_workspace=source,
+        )
+    assert not any(candidates_root.rglob("candidate-limit-bytes"))
 
 
 async def test_candidate_workspace_rejects_symlink_source_and_outside_root(tmp_path: Path) -> None:
