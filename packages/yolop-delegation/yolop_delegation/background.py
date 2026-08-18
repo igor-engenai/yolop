@@ -28,6 +28,7 @@ from . import (
     DelegatePin,
     DelegatePolicyError,
     DelegateRequest,
+    bounded_idempotency_key,
 )
 
 _BACKGROUND_OWNER = "yolop.delegation.background"
@@ -259,7 +260,7 @@ class BackgroundDelegationService:
                 ),
                 parent_run_id=parent_run_id,
                 relation=RunRelation.CHILD,
-                idempotency_key=f"background:{operation_key}",
+                idempotency_key=bounded_idempotency_key("background", operation_key),
                 initiator="delegate_background",
             )
             record = template.model_copy(
@@ -348,7 +349,7 @@ class BackgroundDelegationService:
                 task=record.task,
                 depth=record.depth,
                 child_count=record.child_count,
-                idempotency_key=f"background:{record.operation_key}",
+                idempotency_key=bounded_idempotency_key("background", record.operation_key),
             )
         )
         await self.runtime.execute_claimed(

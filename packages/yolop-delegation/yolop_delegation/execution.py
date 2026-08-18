@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -20,7 +19,13 @@ from yolop_runtime import (
     RunUsage,
 )
 
-from . import DelegateCatalog, DelegatePolicyError, DelegateResolution, ResolvedDelegate
+from . import (
+    DelegateCatalog,
+    DelegatePolicyError,
+    DelegateResolution,
+    ResolvedDelegate,
+    bounded_idempotency_key,
+)
 
 
 class DelegateExecutionError(RuntimeError):
@@ -99,6 +104,8 @@ class DelegationCapability(AbstractCapability[Any]):
         self.depth = depth
         self.child_count = child_count
         self.host_policy = host_policy
+        self._child_count = child_count
+        self._child_count_lock = asyncio.Lock()
         self._tools = Capability[Any](id=self.id, tools=())
         self._register_tools()
 
@@ -120,15 +127,18 @@ class DelegationCapability(AbstractCapability[Any]):
         @self._tools.tool
         async def delegate(ctx: RunContext[Any], alias: str, task: str) -> dict[str, Any]:
             selected = self.resolution.for_alias(alias)
-            selected.validate_invocation(depth=self.depth, child_count=self.child_count)
             if not isinstance(task, str) or not task.strip():
                 raise DelegatePolicyError("Delegate task must not be empty")
             if len(task) > self.host_policy.max_task_chars:
                 raise DelegatePolicyError("Delegate task exceeds the host limit")
+            async with self._child_count_lock:
+                selected.validate_invocation(depth=self.depth, child_count=self._child_count)
+                request_child_count = self._child_count
+                self._child_count += 1
             if not isinstance(ctx.deps, RuntimeDeps):
                 raise DelegatePolicyError("Delegation requires a Runtime execution scope")
             scope = ctx.deps.scope
-            call_id = ctx.tool_call_id or hashlib.sha256(task.encode()).hexdigest()[:24]
+            call_id = ctx.tool_call_id or task
             request = DelegateRequest(
                 namespace=scope.namespace,
                 parent_session_id=scope.session_id,
@@ -137,8 +147,8 @@ class DelegationCapability(AbstractCapability[Any]):
                 delegate=selected,
                 task=task,
                 depth=self.depth,
-                child_count=self.child_count,
-                idempotency_key=f"delegate:{scope.run_id}:{call_id}",
+                child_count=request_child_count,
+                idempotency_key=bounded_idempotency_key("delegate", scope.run_id, call_id),
             )
             try:
                 result = await self.executor.execute(request)
@@ -201,73 +211,103 @@ class RuntimeDelegateExecutor:
         self.catalog = catalog
         self.model_for_id = model_for_id
         self.deps_for_request = deps_for_request
+        self._execution_locks: dict[str, asyncio.Lock] = {}
 
     async def execute(self, request: DelegateRequest) -> DelegateResult:
-        selected = self.catalog.resolve_pin(request.namespace, request.delegate.pin)
-        selected.validate_invocation(
-            depth=request.depth,
-            child_count=request.child_count,
-        )
-        child_spec = selected.spec
-        child_session = await self.runtime.create_session(
-            request.namespace,
-            spec=child_spec,
-            model_id=selected.model_id,
-        )
-        deps, deps_type = self.deps_for_request(request)
-        try:
-            completion = await self.runtime.run(
-                request.namespace,
-                child_session.id,
-                request.task,
-                spec=child_spec,
-                model=self.model_for_id(selected.model_id),
-                model_id=selected.model_id,
-                execution_pin=ExecutionPin.from_spec(
-                    child_spec,
-                    model_id=selected.model_id,
-                ),
-                parent_run_id=request.parent_run_id,
-                relation=RunRelation.CHILD,
-                deps=deps,
-                deps_type=deps_type,
-                idempotency_key=request.idempotency_key,
-                initiator="delegate",
+        lock = self._execution_locks.setdefault(request.idempotency_key, asyncio.Lock())
+        async with lock:
+            selected = self.catalog.resolve_pin(request.namespace, request.delegate.pin)
+            selected.validate_invocation(
+                depth=request.depth,
+                child_count=request.child_count,
             )
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            failed = await _find_child_run(
+            existing = await _find_child_run(
                 self.runtime,
                 request.namespace,
-                child_session.id,
                 request.idempotency_key,
+                parent_run_id=request.parent_run_id,
             )
+            if existing is not None:
+                return _result_from_run(existing)
+            child_spec = selected.spec
+            child_session = await self.runtime.create_session(
+                request.namespace,
+                spec=child_spec,
+                model_id=selected.model_id,
+            )
+            deps, deps_type = self.deps_for_request(request)
+            try:
+                completion = await self.runtime.run(
+                    request.namespace,
+                    child_session.id,
+                    request.task,
+                    spec=child_spec,
+                    model=self.model_for_id(selected.model_id),
+                    model_id=selected.model_id,
+                    execution_pin=ExecutionPin.from_spec(
+                        child_spec,
+                        model_id=selected.model_id,
+                    ),
+                    parent_run_id=request.parent_run_id,
+                    relation=RunRelation.CHILD,
+                    deps=deps,
+                    deps_type=deps_type,
+                    idempotency_key=request.idempotency_key,
+                    initiator="delegate",
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                failed = await _find_child_run(
+                    self.runtime,
+                    request.namespace,
+                    request.idempotency_key,
+                    parent_run_id=request.parent_run_id,
+                )
+                return DelegateResult(
+                    status="failed" if failed is None else failed.status.value,
+                    child_session_id=child_session.id,
+                    child_run_id=None if failed is None else failed.id,
+                    error_code=None if failed is None else failed.error_code or "delegate_failed",
+                    usage=None if failed is None else failed.usage,
+                )
             return DelegateResult(
-                status="failed" if failed is None else failed.status.value,
+                status=completion.run.status.value,
                 child_session_id=child_session.id,
-                child_run_id=None if failed is None else failed.id,
-                error_code=None if failed is None else failed.error_code or "delegate_failed",
-                usage=None if failed is None else failed.usage,
+                child_run_id=completion.run.id,
+                output=completion.run.output,
+                usage=completion.run.usage,
+                error_code=completion.run.error_code,
             )
-        return DelegateResult(
-            status=completion.run.status.value,
-            child_session_id=child_session.id,
-            child_run_id=completion.run.id,
-            output=completion.run.output,
-            usage=completion.run.usage,
-            error_code=completion.run.error_code,
-        )
 
 
 async def _find_child_run(
     runtime: Runtime[Any],
     namespace: str,
-    session_id: str,
     idempotency_key: str,
+    *,
+    parent_run_id: str,
 ) -> RuntimeRunSnapshot | None:
-    runs = await runtime.list_runs(namespace, session_id=session_id)
-    return next((run for run in runs if run.idempotency_key == idempotency_key), None)
+    runs = await runtime.list_runs(namespace)
+    return next(
+        (
+            run
+            for run in runs
+            if run.idempotency_key == idempotency_key and run.parent_run_id == parent_run_id
+        ),
+        None,
+    )
+
+
+def _result_from_run(run: RuntimeRunSnapshot) -> DelegateResult:
+    return DelegateResult(
+        status=run.status.value,
+        child_session_id=run.session_id,
+        child_run_id=run.id,
+        output=run.output,
+        usage=run.usage,
+        error_code=run.error_code,
+    )
 
 
 def _result_payload(result: DelegateResult, *, max_bytes: int) -> dict[str, Any]:

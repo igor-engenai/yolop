@@ -9,6 +9,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai import AgentSpec
 from pydantic_ai.models import KnownModelName, Model
+from yolop_delegation import bounded_idempotency_key
 from yolop_runtime import (
     RunRelation,
     RunStatus,
@@ -174,7 +175,7 @@ class CandidateJudgeService:
             output_type=CandidateVerdict,
             parent_run_id=source_run_id,
             relation=RunRelation.CHILD,
-            idempotency_key=f"judge:{source_run_id}:{','.join(keys)}",
+            idempotency_key=bounded_idempotency_key("judge", source_run_id, *keys),
             initiator="fork_judge",
         )
         verdict = CandidateVerdict.model_validate(completion.run.output)

@@ -7,11 +7,15 @@ from typing import Any, cast
 from pydantic_ai import AgentRunResultEvent, AgentSpec
 from pydantic_ai.messages import ModelMessage, ModelRequest, ToolReturnPart
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, DeltaToolCalls, FunctionModel
+from pytest import raises
 from test_delegation import definition
 from yolop_delegation import (
     DelegateCatalog,
+    DelegateRequest,
+    DelegatePolicyError,
     DelegateResult,
     RuntimeDelegateExecutor,
+    bounded_idempotency_key,
     build_delegation_capability,
 )
 from yolop_runtime import ExecutionScope, Runtime, RuntimeDeps, RunUsage
@@ -103,6 +107,78 @@ async def test_delegate_tool_uses_only_the_parent_resolution_and_bounds_task() -
     assert request.parent_run_id
     assert request.delegate.alias == "research"
     assert request.task == "find facts"
+
+
+async def test_delegate_tool_enforces_total_child_limit() -> None:
+    parent_spec = AgentSpec(
+        metadata={
+            "delegation": {
+                "delegates": [{"alias": "research", "max_children": 1}]
+            }
+        }
+    )
+    executor = RecordingExecutor(
+        DelegateResult(
+            status="completed",
+            child_session_id="00000000-0000-4000-8000-000000000001",
+            child_run_id="00000000-0000-4000-8000-000000000002",
+            output="child output",
+        )
+    )
+    capability = build_delegation_capability(
+        "tenant/acme",
+        parent_spec,
+        catalog=DelegateCatalog({"tenant/acme": [definition()]}),
+        executor=executor,
+    )
+    assert capability is not None
+
+    async def respond(
+        messages: list[ModelMessage], _info: AgentInfo
+    ) -> AsyncIterator[str | DeltaToolCalls]:
+        returns = [
+            part
+            for message in messages
+            if isinstance(message, ModelRequest)
+            for part in message.parts
+            if isinstance(part, ToolReturnPart)
+        ]
+        if len(returns) < 2:
+            yield {
+                0: DeltaToolCall(
+                    name="delegate",
+                    json_args='{"alias":"research","task":"find facts"}',
+                    tool_call_id=f"delegate-{len(returns) + 1}",
+                )
+            }
+        else:
+            yield "done"
+
+    from yolop import Yolop
+
+    runtime_deps = RuntimeDeps(
+        scope=ExecutionScope(
+            namespace="tenant/acme",
+            session_id="00000000-0000-4000-8000-000000000001",
+            run_id="00000000-0000-4000-8000-000000000002",
+        ),
+        state=cast(Any, None),
+        event_sink=None,
+        follow_up_sink=None,
+        host=None,
+    )
+    with raises(DelegatePolicyError, match="maximum children"):
+        async with Yolop().run(
+            parent_spec,
+            "delegate work",
+            model=FunctionModel(stream_function=respond),
+            deps=runtime_deps,
+            deps_type=RuntimeDeps,
+            mandatory_capabilities=[capability],
+        ) as run:
+            _ = [event async for event in run]
+
+    assert len(executor.requests) == 1
 
 
 async def test_delegate_tool_bounds_large_child_output() -> None:
@@ -272,3 +348,19 @@ async def test_runtime_delegate_executor_creates_a_durable_child_session_and_run
         or child_run.root_run_id == completion.run.id
     )
     assert child_run.output == "child result"
+
+    request = DelegateRequest(
+        namespace="tenant/acme",
+        parent_session_id=parent.id,
+        parent_run_id=completion.run.id,
+        root_run_id=completion.run.root_run_id or completion.run.id,
+        delegate=catalog.resolve("tenant/acme", "research"),
+        task="research task",
+        depth=0,
+        child_count=0,
+        idempotency_key=bounded_idempotency_key("delegate", completion.run.id, "delegate-1"),
+    )
+    repeated = await executor.execute(request)
+    assert repeated.child_session_id == child_session.id
+    assert repeated.child_run_id == child_run.id
+    assert len(await runtime.list_sessions("tenant/acme")) == 2

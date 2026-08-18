@@ -9,6 +9,7 @@ from yolop_delegation import (
     DelegatePinMismatchError,
     DelegatePolicyError,
     DelegateUnknownError,
+    bounded_idempotency_key,
     selections_from_spec,
 )
 
@@ -144,6 +145,13 @@ def test_duplicate_alias_and_invalid_metadata_are_rejected() -> None:
         selections_from_spec(
             AgentSpec(metadata={"delegation": {"delegates": [{"alias": "bad name"}]}})
         )
+
+
+def test_generated_idempotency_keys_are_stable_and_runtime_safe() -> None:
+    first = bounded_idempotency_key("delegate", "x" * 10_000)
+
+    assert first == bounded_idempotency_key("delegate", "x" * 10_000)
+    assert len(first) <= 255
 
 
 def test_parent_selection_limits_can_be_tighter_than_host_limits() -> None:

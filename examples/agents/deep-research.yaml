@@ -11,9 +11,9 @@ model_settings:
   thinking: high
 metadata:
   delegation:
-    aliases:
-      - research
-      - review
+    delegates:
+      - alias: research
+      - alias: review
     experimental_forks: false
   memory:
     scopes:

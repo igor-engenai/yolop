@@ -12,6 +12,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai import AgentSpec
 from pydantic_ai.models import KnownModelName, Model
+from yolop_delegation import bounded_idempotency_key
 from yolop_runtime import (
     ExecutionPin,
     RunRelation,
@@ -213,7 +214,7 @@ class ForkCandidateService:
             execution_pin=template.pin,
             parent_run_id=source_run_id,
             relation=RunRelation.CHILD,
-            idempotency_key=f"fork:{candidate_key}",
+            idempotency_key=bounded_idempotency_key("fork", candidate_key),
             initiator="fork_candidate",
         )
         record = template.model_copy(

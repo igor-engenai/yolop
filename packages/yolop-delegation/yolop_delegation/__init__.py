@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import json
 import re
@@ -60,6 +61,7 @@ class DelegateAgentSelection(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     delegates: tuple[DelegateSelection, ...] = ()
+    experimental_forks: bool = False
 
     @model_validator(mode="after")
     def validate_aliases(self) -> DelegateAgentSelection:
@@ -345,6 +347,16 @@ class DelegateCatalog:
         return definitions
 
 
+def bounded_idempotency_key(prefix: str, *parts: str) -> str:
+    """Create a stable Runtime-safe key from unbounded operation inputs."""
+    if not isinstance(prefix, str) or not prefix or len(prefix) > 190:
+        raise DelegateConfigurationError("Idempotency key prefix is invalid")
+    if any(not isinstance(part, str) for part in parts):
+        raise DelegateConfigurationError("Idempotency key parts must be strings")
+    digest = hashlib.sha256("\0".join(parts).encode()).hexdigest()
+    return f"{prefix}:{digest}"
+
+
 def selections_from_spec(spec: object) -> tuple[DelegateSelection, ...]:
     """Read safe delegate alias selections from AgentSpec metadata."""
     if isinstance(spec, Mapping):
@@ -437,6 +449,7 @@ __all__ = [
     "DelegateUnknownError",
     "RuntimeDelegateExecutor",
     "ResolvedDelegate",
+    "bounded_idempotency_key",
     "build_delegation_capability",
     "selections_from_spec",
 ]
